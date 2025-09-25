@@ -59,8 +59,8 @@ st.dataframe(df)
 G = create_network(df)
 st.subheader("Mindmap")
 net = display_network(G)
-net.show("mindmap.html")
-st.components.v1.html(open("mindmap.html").read(), height=750, scrolling=True)
+html_str = net.generate_html()
+st.components.v1.html(html_str, height=750, scrolling=True)
 
 # Export options
 st.sidebar.subheader("Export")
