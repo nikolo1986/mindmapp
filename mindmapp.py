@@ -110,7 +110,7 @@ cytoscape(
     layout={"name": "breadthfirst", "directed": True, "spacingFactor": 1.5},
     stylesheet=stylesheet,
     style={"width": "100%", "height": "700px"},
-    key="cyto"
+    key="cyto"  # ensures it doesn’t re-mount endlessly
 )
 
 # -------------------------------
