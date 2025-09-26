@@ -4,7 +4,7 @@ import pandas as pd
 import json
 from streamlit_js_eval import streamlit_js_eval
 
-st.set_page_config(page_title="Mindmap (One-Step Child Creation)", layout="wide")
+st.set_page_config(page_title="Mindmap (Prompt in Python)", layout="wide")
 st.title("Mindmap MVP (Press & Hold → Add Child)")
 
 USE_LOCAL = False
@@ -18,6 +18,9 @@ DEFAULT_ROWS = [
 ]
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
+
+if "selected_parent" not in st.session_state:
+    st.session_state.selected_parent = ""
 
 # ----------------------------
 # Import / Export
@@ -74,16 +77,14 @@ stylesheet = [
 ]
 
 # ----------------------------
-# HTML (send parent+child via prompt)
+# HTML (send only parentId)
 # ----------------------------
 html = f"""
 <!doctype html>
 <html>
 <head>
   <script src="{CY_SRC}"></script>
-  <style>
-    #cy {{ width: 100%; height: 700px; background: #fff; }}
-  </style>
+  <style>#cy {{ width: 100%; height: 700px; background: #fff; }}</style>
 </head>
 <body>
   <div id="cy"></div>
@@ -95,21 +96,12 @@ html = f"""
       layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }}
     }});
 
-    function sendNewChild(parentId, childName) {{
-      window.parent.postMessage({{
-        isStreamlitMessage: true,
-        type: "newChild",
-        parentId: parentId,
-        childName: childName
-      }}, "*");
+    function sendParentId(pid) {{
+      window.parent.postMessage({{ isStreamlitMessage: true, parentId: pid }}, "*");
     }}
 
     cy.on('cxttap taphold', 'node', function(e) {{
-      var pid = e.target.id();
-      var cname = prompt("Enter child name:");
-      if (cname) {{
-        sendNewChild(pid, cname);
-      }}
+      sendParentId(e.target.id());
     }});
   </script>
 </body>
@@ -120,23 +112,28 @@ st.subheader("Mindmap Canvas (press & hold / right-click to add child)")
 st.components.v1.html(html, height=720, scrolling=True)
 
 # ----------------------------
-# Capture events from JS
+# Bridge: get parentId, then prompt for childName in Python
 # ----------------------------
-event = streamlit_js_eval(js_expressions="event", key="evt")
-if event and isinstance(event, dict) and event.get("type") == "newChild":
-    parent_id = event["parentId"]
-    child_name = event["childName"]
+parent_id = streamlit_js_eval(js_expressions="parentId", key="pid")
+
+if parent_id:
     parent_row = st.session_state.df.loc[st.session_state.df["ID"] == parent_id]
     if not parent_row.empty:
         parent_level = parent_row.iloc[0]["Level"]
         child_type = infer_child_type(parent_level)
-        new_id = child_type[:2].upper() + str(pd.Timestamp.now().value)
-        new_row = {
-            "ID": new_id,
-            "Level": child_type,
-            "Summary": child_name,
-            "Parent ID": parent_id,
-            "Blocks": ""
-        }
-        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-        st.success(f"Added {child_type}: {child_name} under {parent_id}")
+        # open a JS prompt from Python
+        child_name = streamlit_js_eval(
+            js_expressions=f"prompt('Enter {child_type} name for parent {parent_id}:')",
+            key="childPrompt"
+        )
+        if child_name:
+            new_id = child_type[:2].upper() + str(pd.Timestamp.now().value)
+            new_row = {
+                "ID": new_id,
+                "Level": child_type,
+                "Summary": child_name,
+                "Parent ID": parent_id,
+                "Blocks": ""
+            }
+            st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+            st.success(f"Added {child_type}: {child_name} under {parent_id}")
