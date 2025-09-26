@@ -3,8 +3,8 @@ import json
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Mindmap MVP (Textarea Bridge)", layout="wide")
-st.title("Mindmap MVP — Canvas Create → DataFrame Sync")
+st.set_page_config(page_title="Mindmap MVP", layout="wide")
+st.title("Mindmap MVP — Sidebar Create/Edit → Map + CSV")
 
 # ----------------------------
 # Helpers
@@ -34,6 +34,7 @@ COLOR_SHAPE = {
 DEFAULT_ROWS = [
     {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Epic Name": "", "Parent ID": "", "Blocks": ""},
     {"ID": "E1",  "Level": "Epic",     "Summary": "Authentication Epic", "Epic Name": "Auth Epic", "Parent ID": "UC1", "Blocks": ""},
+    {"ID": "S1",  "Level": "Story",    "Summary": "As a user, I can log in", "Epic Name": "", "Parent ID": "E1", "Blocks": ""},
 ]
 
 if "df" not in st.session_state:
@@ -48,12 +49,74 @@ df = df[df["ID"] != ""].drop_duplicates(subset=["ID"])
 st.session_state.df = df
 
 # ----------------------------
+# Sidebar: Add Issue
+# ----------------------------
+st.sidebar.header("Add Issue")
+
+with st.sidebar.form("add_issue_form"):
+    level = st.selectbox("Issue Type", options=ISSUE_TYPES, index=2)
+    summary = st.text_input("Summary")
+    epic_name = ""
+    if level == "Epic":
+        epic_name = st.text_input("Epic Name (for Jira)")
+    parent_choices = [""] + st.session_state.df["ID"].astype(str).tolist()
+    parent_id = st.selectbox("Parent ID", options=parent_choices)
+    submit = st.form_submit_button("Add")
+
+if submit and summary:
+    new_id = id_prefix(level) + str(pd.Timestamp.now().value)
+    new_row = {
+        "ID": new_id,
+        "Level": level,
+        "Summary": summary,
+        "Epic Name": epic_name if level == "Epic" else "",
+        "Parent ID": parent_id,
+        "Blocks": ""
+    }
+    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+    st.sidebar.success(f"Added {level}: {summary}")
+
+# ----------------------------
+# Sidebar: Edit Issue
+# ----------------------------
+st.sidebar.header("Edit Issue")
+
+id_options = [""] + st.session_state.df["ID"].astype(str).tolist()
+edit_id = st.sidebar.selectbox("Select ID", options=id_options)
+
+if edit_id:
+    row = st.session_state.df.loc[st.session_state.df["ID"].astype(str) == edit_id]
+    if not row.empty:
+        idx = row.index[0]
+        new_summary = st.sidebar.text_area("Summary", value=row.iloc[0]["Summary"], height=80)
+        if row.iloc[0]["Level"] == "Epic":
+            new_epic = st.sidebar.text_input("Epic Name", value=row.iloc[0]["Epic Name"])
+        else:
+            new_epic = row.iloc[0]["Epic Name"]
+
+        if st.sidebar.button("Save Changes"):
+            st.session_state.df.at[idx, "Summary"] = new_summary
+            st.session_state.df.at[idx, "Epic Name"] = new_epic
+            st.sidebar.success("Updated")
+
+# ----------------------------
+# Issue Table
+# ----------------------------
+st.subheader("Issue Table (structure edits)")
+edited = st.data_editor(
+    st.session_state.df,
+    num_rows="dynamic",
+    use_container_width=True
+)
+st.session_state.df = edited.fillna("")
+
+# ----------------------------
 # Build Cytoscape elements
 # ----------------------------
 elements = []
-valid_ids = set(df["ID"])
+valid_ids = set(st.session_state.df["ID"])
 
-for _, r in df.iterrows():
+for _, r in st.session_state.df.iterrows():
     node_id = str(r["ID"])
     elements.append({
         "data": {"id": node_id, "label": f"{r['Level']}: {r['Summary']}"},
@@ -81,7 +144,7 @@ stylesheet.append({
 })
 
 # ----------------------------
-# Cytoscape HTML with hidden textarea bridge
+# Render Cytoscape
 # ----------------------------
 CY_SRC = "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
 
@@ -90,107 +153,27 @@ html = f"""
 <html>
 <head>
   <script src="{CY_SRC}"></script>
-  <style>
-    #cy {{ width: 100%; height: 450px; background: #fff; }}
-    .pill {{ margin: 4px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 6px; cursor:pointer; }}
-    .pill.active {{ border: 2px solid #000; }}
-  </style>
+  <style>#cy {{ width:100%; height:450px; background:#fff; }}</style>
 </head>
 <body>
-  <div>
-    {"".join(f'<button class="pill" data-type="{t}">{t}</button>' for t in ISSUE_TYPES)}
-  </div>
-  <textarea id="bridge" style="display:none;"></textarea>
   <div id="cy"></div>
   <script>
-    var cy = cytoscape({{
+    cytoscape({{
       container: document.getElementById('cy'),
       elements: {json.dumps(elements)},
       style: {json.dumps(stylesheet)},
       layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }}
-    }});
-
-    var armedType = null;
-    document.querySelectorAll('.pill').forEach(btn => {{
-      btn.addEventListener('click', () => {{
-        document.querySelectorAll('.pill').forEach(b=>b.classList.remove('active'));
-        if(armedType === btn.dataset.type) {{
-          armedType = null;
-        }} else {{
-          armedType = btn.dataset.type;
-          btn.classList.add('active');
-        }}
-      }});
-    }});
-
-    function recordEvent(obj){{
-      const el = document.getElementById("bridge");
-      el.value = JSON.stringify(obj);
-      el.dispatchEvent(new Event("input"));
-    }}
-
-    function promptName(level){{
-      return window.prompt("Enter " + level + " name:");
-    }}
-
-    cy.on('tap', function(evt){{
-      if(!armedType) return;
-      if(evt.target === cy) {{
-        var name = promptName(armedType);
-        if(name) {{
-          recordEvent({{kind:"create", level: armedType, summary: name, parentId:""}});
-        }}
-      }}
-    }});
-
-    cy.on('tap', 'node', function(evt){{
-      if(!armedType) return;
-      var pid = evt.target.id();
-      var name = promptName(armedType);
-      if(name) {{
-        recordEvent({{kind:"create", level: armedType, summary: name, parentId: pid}});
-      }}
     }});
   </script>
 </body>
 </html>
 """
 
-# ----------------------------
-# Render Canvas + Read Events
-# ----------------------------
 st.subheader("Mindmap Canvas (450px)")
-event_json = st.text_area("bridge", key="bridge", label_visibility="collapsed")
-
-st.components.v1.html(html, height=520, scrolling=True)
+st.components.v1.html(html, height=500, scrolling=True)
 
 # ----------------------------
-# Process Events
+# Export CSV
 # ----------------------------
-if event_json:
-    try:
-        evt = json.loads(event_json)
-    except Exception:
-        evt = None
-    if evt and evt.get("kind") == "create":
-        new_id = id_prefix(evt["level"]) + str(pd.Timestamp.now().value)
-        new_row = {
-            "ID": new_id,
-            "Level": evt["level"],
-            "Summary": evt["summary"],
-            "Epic Name": evt["summary"] if evt["level"] == "Epic" else "",
-            "Parent ID": evt["parentId"],
-            "Blocks": ""
-        }
-        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-        st.success(f"Added {evt['level']}: {evt['summary']}")
-        st.rerun()
-
-# ----------------------------
-# Table + Export
-# ----------------------------
-st.subheader("Issue Table")
-st.dataframe(st.session_state.df, use_container_width=True)
-
 csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
 st.sidebar.download_button("Download CSV", csv_bytes, "mindmap.csv", "text/csv")
