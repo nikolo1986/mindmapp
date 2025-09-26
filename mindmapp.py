@@ -3,11 +3,11 @@ import streamlit as st
 import pandas as pd
 import json
 
-st.set_page_config(page_title="Mindmap with Hierarchy + Prompt", layout="wide")
-st.title("Mindmap MVP (Interactive Canvas + Hierarchy Rules)")
+st.set_page_config(page_title="Mindmap with Table Sync", layout="wide")
+st.title("Mindmap MVP (Canvas + Table + Add Child)")
 
 # ------------------------------------------------
-# Toggle: use local static files later (Posit Connect)
+# Toggle: use local Cytoscape later (Posit Connect)
 # ------------------------------------------------
 USE_LOCAL = False  # set True when you bundle cytoscape.min.js in ./static/
 
@@ -27,6 +27,9 @@ DEFAULT_ROWS = [
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
 
+# ------------------------------------------------
+# Sidebar: Import/Export
+# ------------------------------------------------
 st.sidebar.header("Import / Export")
 up = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 if up:
@@ -36,6 +39,53 @@ if up:
 csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
 st.sidebar.download_button("Export CSV", csv_bytes, "mindmap.csv", "text/csv")
 
+# ------------------------------------------------
+# Sidebar: Add Child Issue
+# ------------------------------------------------
+st.sidebar.subheader("Add Child Issue")
+
+with st.sidebar.form("add_child_form"):
+    parent_id = st.selectbox(
+        "Select Parent ID",
+        options=[""] + st.session_state.df["ID"].tolist(),
+        help="Pick a parent issue from the table",
+    )
+    child_name = st.text_input("Child Summary")
+    submit = st.form_submit_button("Add Child")
+
+if submit and parent_id and child_name:
+    parent_row = st.session_state.df.loc[st.session_state.df["ID"] == parent_id]
+    if not parent_row.empty:
+        parent_level = parent_row.iloc[0]["Level"]
+
+        # infer child type
+        if parent_level == "Use-Case":
+            child_type = "Epic"
+        elif parent_level == "Epic":
+            child_type = "Story"
+        elif parent_level == "Story":
+            child_type = "Task"
+        elif parent_level == "Task":
+            child_type = "Sub-task"
+        else:
+            child_type = "Task"
+
+        new_id = child_type[:2].upper() + str(pd.Timestamp.now().value)
+        new_row = {
+            "ID": new_id,
+            "Level": child_type,
+            "Summary": child_name,
+            "Parent ID": parent_id,
+            "Blocks": ""
+        }
+        st.session_state.df = pd.concat(
+            [st.session_state.df, pd.DataFrame([new_row])], ignore_index=True
+        )
+        st.sidebar.success(f"Added {child_type}: {child_name} under {parent_id}")
+
+# ------------------------------------------------
+# Issue Table (editable)
+# ------------------------------------------------
 st.subheader("Issue Table")
 edited = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
 st.session_state.df = edited.fillna("")
@@ -81,7 +131,7 @@ stylesheet = [
 ]
 
 # ------------------------------------------------
-# HTML embed with context menu (works desktop & mobile)
+# HTML embed (render graph only; add child via sidebar)
 # ------------------------------------------------
 html = f"""
 <!doctype html>
@@ -94,48 +144,12 @@ html = f"""
     #cy {{
       width: 100%;
       height: 700px;
-      -webkit-touch-callout: none;
-      -webkit-user-select: none;
-      user-select: none;
-      touch-action: none;
       background: #ffffff;
-    }}
-    #ctx {{
-      position: absolute;
-      display: none;
-      background: rgba(30, 30, 30, 0.95);
-      color: #fff;
-      border-radius: 8px;
-      padding: 8px;
-      z-index: 9999;
-      min-width: 140px;
-      box-shadow: 0 6px 16px rgba(0,0,0,0.35);
-      font-family: sans-serif;
-      font-size: 14px;
-    }}
-    #ctx button {{
-      width: 100%;
-      display: block;
-      background: transparent;
-      border: none;
-      color: #fff;
-      text-align: left;
-      padding: 6px 8px;
-      cursor: pointer;
-    }}
-    #ctx button:hover {{
-      background: rgba(255,255,255,0.12);
     }}
   </style>
 </head>
 <body>
   <div id="cy"></div>
-  <div id="ctx">
-    <button id="ctx-add">Add Child</button>
-    <button id="ctx-del">Delete Node</button>
-    <button id="ctx-cancel">Cancel</button>
-  </div>
-
   <script>
     var cy = cytoscape({{
       container: document.getElementById('cy'),
@@ -144,89 +158,15 @@ html = f"""
       layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }},
       wheelSensitivity: 0.2
     }});
-
-    var menu = document.getElementById('ctx');
-    var addBtn = document.getElementById('ctx-add');
-    var delBtn = document.getElementById('ctx-del');
-    var cancelBtn = document.getElementById('ctx-cancel');
-    var lastNode = null;
-
-    function showMenu(node, px, py) {{
-      lastNode = node;
-      var rect = cy.container().getBoundingClientRect();
-      menu.style.left = (rect.left + px) + 'px';
-      menu.style.top  = (rect.top + py) + 'px';
-      menu.style.display = 'block';
-    }}
-
-    function hideMenu() {{
-      menu.style.display = 'none';
-      lastNode = null;
-    }}
-
-    // Right-click (desktop) -> 'cxttap'
-    cy.on('cxttap', 'node', function(e) {{
-      var rp = e.renderedPosition || e.position;
-      showMenu(e.target, rp.x, rp.y);
-    }});
-
-    // Long-press (mobile) -> 'taphold'
-    cy.on('taphold', 'node', function(e) {{
-      var rp = e.renderedPosition || e.position;
-      showMenu(e.target, rp.x, rp.y);
-    }});
-
-    // Hide when clicking elsewhere
-    cy.on('tap', function(e) {{
-      if (e.target === cy) hideMenu();
-    }});
-    document.addEventListener('scroll', hideMenu, true);
-
-    // Menu actions
-    addBtn.addEventListener('click', function() {{
-      if (!lastNode) return;
-
-      // hierarchy rule
-      var parentType = lastNode.classes()[0];
-      var childType = "Task";
-      if (parentType === "Use-Case") childType = "Epic";
-      else if (parentType === "Epic") childType = "Story";
-      else if (parentType === "Story") childType = "Task";
-      else if (parentType === "Task") childType = "Sub-task";
-
-      var name = prompt("Enter " + childType + " name:");
-      if (name) {{
-        var newId = childType.substring(0,2) + Date.now();
-        var p = lastNode.position();
-        cy.add({{
-          data: {{ id: newId, label: childType + ": " + name }},
-          classes: childType,
-          position: {{ x: p.x + 60, y: p.y + 60 }}
-        }});
-        cy.add({{
-          data: {{ source: lastNode.id(), target: newId, relation: 'hierarchy' }}
-        }});
-      }}
-      hideMenu();
-    }});
-
-    delBtn.addEventListener('click', function() {{
-      if (!lastNode) return;
-      cy.remove(lastNode);
-      hideMenu();
-    }});
-
-    cancelBtn.addEventListener('click', hideMenu);
-
-    // Prevent browser native context menu
-    cy.container().addEventListener('contextmenu', function(e) {{ e.preventDefault(); }});
   </script>
 </body>
 </html>
 """
 
-st.subheader("Mindmap Canvas (right-click or long-press a node)")
+st.subheader("Mindmap Canvas (auto-updates from table)")
 st.components.v1.html(html, height=720, scrolling=True)
 
-# Export the exact HTML
+# ------------------------------------------------
+# Export the HTML
+# ------------------------------------------------
 st.download_button("Export Interactive HTML", html, file_name="mindmap.html", mime="text/html")
