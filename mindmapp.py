@@ -1,25 +1,21 @@
+# streamlit run mindmap_html.py
 import streamlit as st
 import pandas as pd
 import json
 
-st.set_page_config(page_title="Mindmap with Context Menu", layout="wide")
-st.title("Mindmap MVP (Cytoscape.js + Context Menu)")
+st.set_page_config(page_title="Mindmap (Context Menu Long-Press)", layout="wide")
+st.title("Mindmap MVP (Cytoscape + Context Menu)")
 
-# ----------------------------
-# Config: toggle CDN vs Local
-# ----------------------------
-USE_LOCAL = False  # set True once you download JS files into static/
+# ------------------------------------------------
+# Toggle: use local static files later (Posit)
+# ------------------------------------------------
+USE_LOCAL = False  # set True when you place cytoscape.min.js in ./static/
 
-if USE_LOCAL:
-    cytoscape_src = "static/cytoscape.min.js"
-    cxtmenu_src = "static/cytoscape-cxtmenu.min.js"
-else:
-    cytoscape_src = "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
-    cxtmenu_src = "https://unpkg.com/cytoscape-cxtmenu/cytoscape-cxtmenu.min.js"
+CY_SRC = "static/cytoscape.min.js" if USE_LOCAL else "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
 
-# ----------------------------
-# Default dataset
-# ----------------------------
+# ------------------------------------------------
+# Sample data / table editing
+# ------------------------------------------------
 DEFAULT_ROWS = [
     {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Parent ID": "", "Blocks": ""},
     {"ID": "E1",  "Level": "Epic",     "Summary": "Authentication", "Parent ID": "UC1", "Blocks": ""},
@@ -31,41 +27,23 @@ DEFAULT_ROWS = [
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
 
-# ----------------------------
-# Sidebar: CSV import/export
-# ----------------------------
 st.sidebar.header("Import / Export")
-uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-if uploaded:
-    st.session_state.df = pd.read_csv(uploaded).fillna("")
-    st.sidebar.success("CSV imported.")
+up = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+if up:
+    st.session_state.df = pd.read_csv(up).fillna("")
+    st.sidebar.success("CSV imported")
 
 csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
-st.sidebar.download_button("Export CSV", csv_bytes, file_name="mindmap.csv", mime="text/csv")
+st.sidebar.download_button("Export CSV", csv_bytes, "mindmap.csv", "text/csv")
 
-# ----------------------------
-# Table editor
-# ----------------------------
 st.subheader("Issue Table")
-edited_df = st.data_editor(
-    st.session_state.df,
-    num_rows="dynamic",
-    use_container_width=True,
-)
-st.session_state.df = edited_df.fillna("")
+edited = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
+st.session_state.df = edited.fillna("")
 
-# ----------------------------
-# Build Cytoscape elements
-# ----------------------------
+# ------------------------------------------------
+# Build Cytoscape elements + stylesheet
+# ------------------------------------------------
 elements = []
-STYLEMAP = {
-    "Use-Case": {"color": "#1f77b4", "shape": "ellipse", "size": 80, "font": 18},
-    "Epic": {"color": "#2ca02c", "shape": "round-rectangle", "size": 70, "font": 16},
-    "Story": {"color": "#ff7f0e", "shape": "diamond", "size": 60, "font": 14},
-    "Task": {"color": "#7f7f7f", "shape": "triangle", "size": 50, "font": 12},
-    "Sub-task": {"color": "#9467bd", "shape": "hexagon", "size": 40, "font": 11},
-}
-
 for _, r in st.session_state.df.iterrows():
     elements.append({
         "data": {"id": r["ID"], "label": f"{r['Level']}: {r['Summary']}"},
@@ -85,32 +63,82 @@ stylesheet = [
         "style": {
             "label": "data(label)",
             "color": "white",
-            "text-outline-color": "#000000",
+            "text-outline-color": "#000",
             "text-outline-width": 2,
             "text-valign": "center",
             "text-halign": "center"
         }
     },
     {"selector": ".Use-Case", "style": {"background-color": "#1f77b4", "width": 80, "height": 80, "shape": "ellipse", "font-size": 18}},
-    {"selector": ".Epic", "style": {"background-color": "#2ca02c", "width": 70, "height": 70, "shape": "round-rectangle", "font-size": 16}},
-    {"selector": ".Story", "style": {"background-color": "#ff7f0e", "width": 60, "height": 60, "shape": "diamond", "font-size": 14}},
-    {"selector": ".Task", "style": {"background-color": "#7f7f7f", "width": 50, "height": 50, "shape": "triangle", "font-size": 12}},
+    {"selector": ".Epic",     "style": {"background-color": "#2ca02c", "width": 70, "height": 70, "shape": "round-rectangle", "font-size": 16}},
+    {"selector": ".Story",    "style": {"background-color": "#ff7f0e", "width": 60, "height": 60, "shape": "diamond", "font-size": 14}},
+    {"selector": ".Task",     "style": {"background-color": "#7f7f7f", "width": 50, "height": 50, "shape": "triangle", "font-size": 12}},
     {"selector": ".Sub-task", "style": {"background-color": "#9467bd", "width": 40, "height": 40, "shape": "hexagon", "font-size": 11}},
-    {"selector": "edge[relation = 'hierarchy']", "style": {"curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#999", "target-arrow-color": "#999"}},
-    {"selector": "edge[relation = 'dependency']", "style": {"curve-style": "bezier", "target-arrow-shape": "vee", "line-color": "red", "target-arrow-color": "red", "line-style": "dashed"}},
+    {"selector": "edge[relation = 'hierarchy']",
+     "style": {"curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#999", "target-arrow-color": "#999"}},
+    {"selector": "edge[relation = 'dependency']",
+     "style": {"curve-style": "bezier", "target-arrow-shape": "vee", "line-color": "red", "target-arrow-color": "red", "line-style": "dashed"}},
 ]
 
-# ----------------------------
-# HTML with Cytoscape + cxtmenu
-# ----------------------------
-html_str = f"""
+# ------------------------------------------------
+# HTML embed with a custom context menu that works
+# on right-click (desktop) and long-press (mobile).
+# ------------------------------------------------
+html = f"""
+<!doctype html>
 <html>
 <head>
-  <script src="{cytoscape_src}"></script>
-  <script src="{cxtmenu_src}"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="{CY_SRC}"></script>
+  <style>
+    /* Make sure the canvas captures touch; avoid iOS callouts */
+    #cy {{
+      width: 100%;
+      height: 700px;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: none; /* improves long-press reliability */
+      background: #ffffff;
+    }}
+    /* Simple custom context menu */
+    #ctx {{
+      position: absolute;
+      display: none;
+      background: rgba(30, 30, 30, 0.95);
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px;
+      z-index: 9999;
+      min-width: 140px;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+      font-family: sans-serif;
+      font-size: 14px;
+    }}
+    #ctx button {{
+      width: 100%;
+      display: block;
+      background: transparent;
+      border: none;
+      color: #fff;
+      text-align: left;
+      padding: 6px 8px;
+      cursor: pointer;
+    }}
+    #ctx button:hover {{
+      background: rgba(255,255,255,0.12);
+    }}
+  </style>
 </head>
 <body>
-  <div id="cy" style="width: 100%; height: 700px;"></div>
+  <div id="cy"></div>
+  <div id="ctx">
+    <button id="ctx-add">Add Child</button>
+    <button id="ctx-del">Delete Node</button>
+    <button id="ctx-cancel">Cancel</button>
+  </div>
+
   <script>
     var cy = cytoscape({{
       container: document.getElementById('cy'),
@@ -120,40 +148,70 @@ html_str = f"""
       wheelSensitivity: 0.2
     }});
 
-    // Context menu on right-click/long-press
-    cy.cxtmenu({{
-      selector: 'node',
-      commands: [
-        {{
-          content: 'Add Child',
-          select: function(ele) {{
-            var newId = "N" + Date.now();
-            cy.add({{
-              data: {{ id: newId, label: "New Child" }},
-              position: {{ x: ele.position('x') + 60, y: ele.position('y') + 60 }}
-            }});
-            cy.add({{
-              data: {{ source: ele.id(), target: newId, relation: "hierarchy" }}
-            }});
-          }}
-        }},
-        {{
-          content: 'Delete Node',
-          select: function(ele) {{
-            cy.remove(ele);
-          }}
-        }}
-      ]
+    var menu = document.getElementById('ctx');
+    var addBtn = document.getElementById('ctx-add');
+    var delBtn = document.getElementById('ctx-del');
+    var cancelBtn = document.getElementById('ctx-cancel');
+    var lastNode = null;
+
+    function showMenu(node, px, py) {{
+      lastNode = node;
+      var rect = cy.container().getBoundingClientRect();
+      menu.style.left = (rect.left + px) + 'px';
+      menu.style.top  = (rect.top + py) + 'px';
+      menu.style.display = 'block';
+    }}
+
+    function hideMenu() {{
+      menu.style.display = 'none';
+      lastNode = null;
+    }}
+
+    // Right-click (desktop) -> 'cxttap'
+    cy.on('cxttap', 'node', function(e) {{
+      var rp = e.renderedPosition || e.position;
+      showMenu(e.target, rp.x, rp.y);
     }});
+
+    // Long-press (mobile) -> 'taphold'
+    cy.on('taphold', 'node', function(e) {{
+      var rp = e.renderedPosition || e.position;
+      showMenu(e.target, rp.x, rp.y);
+    }});
+
+    // Hide when clicking elsewhere
+    cy.on('tap', function(e) {{
+      if (e.target === cy) hideMenu();
+    }});
+    document.addEventListener('scroll', hideMenu, true);
+
+    // Menu actions
+    addBtn.addEventListener('click', function() {{
+      if (!lastNode) return;
+      var newId = 'N' + Date.now();
+      var p = lastNode.position();
+      cy.add({{ data: {{ id: newId, label: 'New Child' }}, position: {{ x: p.x + 60, y: p.y + 60 }} }});
+      cy.add({{ data: {{ source: lastNode.id(), target: newId, relation: 'hierarchy' }} }});
+      hideMenu();
+    }});
+
+    delBtn.addEventListener('click', function() {{
+      if (!lastNode) return;
+      cy.remove(lastNode);
+      hideMenu();
+    }});
+
+    cancelBtn.addEventListener('click', hideMenu);
+
+    // Prevent browser native context menu on the canvas
+    cy.container().addEventListener('contextmenu', function(e) {{ e.preventDefault(); }});
   </script>
 </body>
 </html>
 """
 
-st.subheader("Mindmap Canvas (Interactive with Context Menu)")
-st.components.v1.html(html_str, height=720, scrolling=True)
+st.subheader("Mindmap Canvas (right-click or long-press a node)")
+st.components.v1.html(html, height=720, scrolling=True)
 
-# ----------------------------
-# Export HTML
-# ----------------------------
-st.download_button("Export Interactive HTML", html_str, file_name="mindmap.html", mime="text/html")
+# Export the exact same HTML you see
+st.download_button("Export Interactive HTML", html, file_name="mindmap.html", mime="text/html")
