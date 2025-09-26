@@ -1,213 +1,141 @@
-# streamlit run mindmap_builder.py
+# streamlit run mindmap_mvp.py
 import streamlit as st
 import pandas as pd
-import networkx as nx
-from pyvis.network import Network
-from io import BytesIO
+from streamlit_cytoscapejs import cytoscape
 
-st.set_page_config(page_title="Mindmap Builder → CSV/HTML/Jira", layout="wide")
-st.title("Mindmap Builder (create, import, export)")
+st.set_page_config(page_title="Mindmap MVP", layout="wide")
+st.title("Mindmap MVP (Canvas + Table)")
 
-# ------------------------------------------------------------
-# Session-state initialization
-# ------------------------------------------------------------
-DEFAULT_ROWS = [
-    {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Parent ID": "", "Blocks": ""},
-    {"ID": "E1",  "Level": "Epic",     "Summary": "Authentication", "Parent ID": "UC1", "Blocks": ""},
-    {"ID": "S1",  "Level": "Story",    "Summary": "As a user I want to log in", "Parent ID": "E1", "Blocks": ""},
-    {"ID": "T1",  "Level": "Task",     "Summary": "Build login form", "Parent ID": "S1", "Blocks": ""},
-    {"ID": "T2",  "Level": "Task",     "Summary": "Connect backend",  "Parent ID": "S1", "Blocks": "T1"},
-]
+# -------------------------------
+# Issue type styling
+# -------------------------------
+STYLEMAP = {
+    "Use-Case": {"color": "#1f77b4", "shape": "ellipse", "size": 80},
+    "Epic": {"color": "#2ca02c", "shape": "round-rectangle", "size": 70},
+    "Story": {"color": "#ff7f0e", "shape": "diamond", "size": 60},
+    "Task": {"color": "#7f7f7f", "shape": "triangle", "size": 50},
+    "Sub-task": {"color": "#9467bd", "shape": "hexagon", "size": 40},
+}
 
-REQUIRED_COLS = ["ID", "Level", "Summary", "Parent ID", "Blocks"]
-LEVEL_OPTIONS = ["Use-Case", "Epic", "Story", "Task", "Sub-task"]
+LEVELS = list(STYLEMAP.keys())
+COLUMNS = ["ID", "Level", "Summary", "Parent ID", "Blocks"]
 
 if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame(DEFAULT_ROWS, columns=REQUIRED_COLS)
+    st.session_state.df = pd.DataFrame([
+        {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Parent ID": "", "Blocks": ""},
+        {"ID": "E1", "Level": "Epic", "Summary": "Authentication", "Parent ID": "UC1", "Blocks": ""},
+        {"ID": "S1", "Level": "Story", "Summary": "As a user I want to log in", "Parent ID": "E1", "Blocks": ""},
+        {"ID": "T1", "Level": "Task", "Summary": "Build login form", "Parent ID": "S1", "Blocks": ""},
+        {"ID": "T2", "Level": "Task", "Summary": "Connect backend", "Parent ID": "S1", "Blocks": "T1"},
+    ], columns=COLUMNS)
 
-# ------------------------------------------------------------
-# Sidebar: Import / Export
-# ------------------------------------------------------------
+# -------------------------------
+# Sidebar Import / Export
+# -------------------------------
 st.sidebar.header("Import / Export")
 
-uploaded = st.sidebar.file_uploader("Import CSV (ID, Level, Summary, Parent ID, Blocks)", type=["csv"])
-if uploaded is not None:
-    try:
-        imp = pd.read_csv(uploaded, dtype=str).fillna("")
-        missing = [c for c in REQUIRED_COLS if c not in imp.columns]
-        if missing:
-            st.sidebar.error(f"Missing columns: {missing}")
-        else:
-            # Normalize levels that don't match exactly
-            imp["Level"] = imp["Level"].apply(lambda x: x if x in LEVEL_OPTIONS else x.strip().title())
-            st.session_state.df = imp[REQUIRED_COLS].copy()
-            st.sidebar.success("CSV imported.")
-    except Exception as e:
-        st.sidebar.error(f"Failed to import: {e}")
+uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+if uploaded:
+    st.session_state.df = pd.read_csv(uploaded).fillna("")
+    st.sidebar.success("CSV imported.")
 
-def export_current_csv(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
+csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
+st.sidebar.download_button("Export CSV", csv_bytes, file_name="mindmap.csv", mime="text/csv")
 
-def build_jira_excel(df: pd.DataFrame) -> bytes:
-    """
-    Creates an Excel with two sheets:
-      - Issues: Summary, Issue Type, Parent, Description, Priority, Assignee, Reporter, Labels, Fix Version/s
-      - Issue Links: Source ID, Target ID, Link Type
-    """
-    # Map Level -> Issue Type
-    level_to_type = {
-        "Use-Case": "Use Case",
-        "Epic": "Epic",
-        "Story": "Story",
-        "Task": "Task",
-        "Sub-task": "Sub-task",
-    }
-    # Issues
-    issues_rows = []
-    for _, r in df.iterrows():
-        issues_rows.append({
-            "Summary": r["Summary"],
-            "Issue Type": level_to_type.get(r["Level"], "Task"),
-            "Parent": r["Parent ID"],          # rename to "Epic Link" in Jira if needed
-            "Description": "",
-            "Priority": "Medium",
-            "Assignee": "unassigned",
-            "Reporter": "system",
-            "Labels": "",
-            "Fix Version/s": ""
-        })
-    issues_df = pd.DataFrame(issues_rows)
-
-    # Links (Blocks -> dependency)
-    links_rows = []
-    for _, r in df.iterrows():
-        if r["Blocks"].strip():
-            for tgt in [x.strip() for x in str(r["Blocks"]).split(";") if x.strip()]:
-                links_rows.append({
-                    "Source ID": r["ID"],
-                    "Target ID": tgt,
-                    "Link Type": "Blocks",
-                })
-    links_df = pd.DataFrame(links_rows) if links_rows else pd.DataFrame(columns=["Source ID", "Target ID", "Link Type"])
-
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        issues_df.to_excel(w, sheet_name="Issues", index=False)
-        links_df.to_excel(w, sheet_name="Issue Links", index=False)
-    return buf.getvalue()
-
-# ------------------------------------------------------------
-# Data editor (create / edit in-app)
-# ------------------------------------------------------------
-st.subheader("Edit Items")
-st.caption("Add rows directly in the table. Columns: ID, Level, Summary, Parent ID, Blocks (semicolon-separated).")
-
+# -------------------------------
+# Table Editor
+# -------------------------------
+st.subheader("Issue Table")
 edited_df = st.data_editor(
     st.session_state.df,
     num_rows="dynamic",
     use_container_width=True,
     column_config={
-        "Level": st.column_config.SelectboxColumn(options=LEVEL_OPTIONS),
+        "Level": st.column_config.SelectboxColumn(options=LEVELS),
         "Summary": st.column_config.TextColumn(),
-        "Parent ID": st.column_config.TextColumn(help="ID of parent issue (empty for root)"),
-        "Blocks": st.column_config.TextColumn(help="IDs this item blocks; separate with ';'"),
-        "ID": st.column_config.TextColumn(help="Unique identifier you choose (e.g., UC1, E1, S1, T1)"),
+        "Parent ID": st.column_config.TextColumn(),
+        "Blocks": st.column_config.TextColumn(),
+        "ID": st.column_config.TextColumn(),
     },
-    key="editor",
+    key="editor"
 )
-# Persist edits
 st.session_state.df = edited_df.fillna("")
 
-# ------------------------------------------------------------
-# Build graph with NetworkX + PyVis (no temp files)
-# ------------------------------------------------------------
-def build_graph(df: pd.DataFrame) -> Network:
-    G = nx.DiGraph()
-    # Add nodes
-    for _, r in df.iterrows():
-        label = f"{r['Level']}: {r['Summary']}"
-        G.add_node(r["ID"], label=label, level=r["Level"], summary=r["Summary"])
+# -------------------------------
+# Cytoscape Graph
+# -------------------------------
+st.subheader("Mindmap Canvas (drag & drop)")
 
-    # Parent -> child edges
-    for _, r in df.iterrows():
-        pid = r["Parent ID"].strip()
-        if pid:
-            if pid in G and r["ID"] in G:
-                G.add_edge(pid, r["ID"])
+elements = []
+edges = []
 
-    # Dependency edges (red)
-    for _, r in df.iterrows():
-        if r["Blocks"].strip():
-            for tgt in [x.strip() for x in str(r["Blocks"]).split(";") if x.strip()]:
-                if r["ID"] in G and tgt in G:
-                    G.add_edge(r["ID"], tgt, color="red")
+for _, r in st.session_state.df.iterrows():
+    style = STYLEMAP.get(r["Level"], {"color": "gray", "shape": "ellipse", "size": 50})
+    elements.append({
+        "data": {"id": r["ID"], "label": f"{r['Level']}: {r['Summary']}"},
+        "classes": r["Level"],
+    })
+    # Parent-child hierarchy
+    if r["Parent ID"].strip():
+        edges.append({
+            "data": {"source": r["Parent ID"], "target": r["ID"], "relation": "hierarchy"}
+        })
+    # Dependency (blocks)
+    if r["Blocks"].strip():
+        for tgt in str(r["Blocks"]).split(";"):
+            tgt = tgt.strip()
+            if tgt:
+                edges.append({
+                    "data": {"source": r["ID"], "target": tgt, "relation": "dependency"}
+                })
 
-    net = Network(height="700px", width="100%", directed=True, notebook=False)
-    net.from_nx(G)
-    # Physics/spacing
-    net.repulsion(node_distance=220, spring_length=220, spring_strength=0.05, damping=0.85)
-    return net
+elements.extend(edges)
 
-st.subheader("Mindmap Preview")
-graph = build_graph(st.session_state.df)
-html_str = graph.generate_html()  # no filesystem writes; safe on Streamlit Cloud
-st.components.v1.html(html_str, height=720, scrolling=True)
+stylesheet = [
+    {
+        "selector": "node",
+        "style": {"label": "data(label)", "text-valign": "center", "text-halign": "center"}
+    },
+    {"selector": ".Use-Case", "style": {"background-color": "#1f77b4", "width": 80, "height": 80, "shape": "ellipse", "font-size": 16}},
+    {"selector": ".Epic", "style": {"background-color": "#2ca02c", "width": 70, "height": 70, "shape": "round-rectangle", "font-size": 14}},
+    {"selector": ".Story", "style": {"background-color": "#ff7f0e", "width": 60, "height": 60, "shape": "diamond", "font-size": 12}},
+    {"selector": ".Task", "style": {"background-color": "#7f7f7f", "width": 50, "height": 50, "shape": "triangle", "font-size": 10}},
+    {"selector": ".Sub-task", "style": {"background-color": "#9467bd", "width": 40, "height": 40, "shape": "hexagon", "font-size": 9}},
+    {"selector": "edge[relation = 'hierarchy']", "style": {"curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#999", "target-arrow-color": "#999"}},
+    {"selector": "edge[relation = 'dependency']", "style": {"curve-style": "bezier", "target-arrow-shape": "vee", "line-color": "red", "target-arrow-color": "red", "line-style": "dashed"}},
+]
 
-# ------------------------------------------------------------
-# Export buttons
-# ------------------------------------------------------------
-st.subheader("Export")
-col1, col2, col3 = st.columns([1,1,1])
+cytoscape(
+    elements=elements,
+    layout={"name": "breadthfirst", "directed": True, "spacingFactor": 1.5},
+    stylesheet=stylesheet,
+    style={"width": "100%", "height": "700px"},
+    key="cyto"
+)
 
-with col1:
-    csv_bytes = export_current_csv(st.session_state.df)
-    st.download_button("Download CSV (current table)", csv_bytes, file_name="mindmap.csv", mime="text/csv")
+# -------------------------------
+# HTML Export
+# -------------------------------
+import json
 
-with col2:
-    jira_xlsx = build_jira_excel(st.session_state.df)
-    st.download_button(
-        "Download Excel (Jira Issues + Links)",
-        jira_xlsx,
-        file_name="jira_issues_and_links.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+html_export = f"""
+<html>
+<head>
+  <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+</head>
+<body>
+  <div id="cy" style="width: 100%; height: 100vh;"></div>
+  <script>
+    var cy = cytoscape({{
+      container: document.getElementById('cy'),
+      elements: {json.dumps(elements)},
+      style: {json.dumps(stylesheet)},
+      layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }},
+      wheelSensitivity: 0.2
+    }});
+  </script>
+</body>
+</html>
+"""
 
-with col3:
-    # give the same HTML used in the preview
-    st.download_button(
-        "Download Interactive HTML",
-        html_str,
-        file_name="mindmap.html",
-        mime="text/html",
-    )
-
-# ------------------------------------------------------------
-# Lightweight validation / tips
-# ------------------------------------------------------------
-with st.expander("Validation Tips"):
-    # Missing IDs
-    missing_ids = st.session_state.df[st.session_state.df["ID"].str.strip() == ""]
-    if not missing_ids.empty:
-        st.warning("Some rows have empty ID values. Give each item a unique ID (e.g., UC1, E1, S1, T1).")
-
-    # Parent ID that doesn't exist
-    bad_parents = []
-    ids = set(st.session_state.df["ID"].tolist())
-    for _, r in st.session_state.df.iterrows():
-        pid = r["Parent ID"].strip()
-        if pid and pid not in ids:
-            bad_parents.append((r["ID"], pid))
-    if bad_parents:
-        st.warning(f"Parent IDs not found: {bad_parents}")
-
-    # Blocks pointing to missing IDs
-    bad_blocks = []
-    for _, r in st.session_state.df.iterrows():
-        if r["Blocks"].strip():
-            for tgt in [x.strip() for x in str(r["Blocks"]).split(";") if x.strip()]:
-                if tgt not in ids:
-                    bad_blocks.append((r["ID"], tgt))
-    if bad_blocks:
-        st.warning(f"Dependency targets not found: {bad_blocks}")
-
-st.caption("Tip: For Jira import, you may need to rename the 'Parent' column to 'Epic Link' depending on your Jira configuration.")
+st.download_button("Export Interactive HTML", html_export, file_name="mindmap.html", mime="text/html")
