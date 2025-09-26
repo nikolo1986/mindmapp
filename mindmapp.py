@@ -3,8 +3,8 @@ import streamlit as st
 import pandas as pd
 import json
 
-st.set_page_config(page_title="Mindmap (Sidebar Add Child)", layout="wide")
-st.title("Mindmap MVP (Sidebar Add Child → Table → Canvas)")
+st.set_page_config(page_title="Mindmap (Safe Build)", layout="wide")
+st.title("Mindmap MVP (Safe Table → Canvas)")
 
 # ----------------------------
 # Default dataset
@@ -46,16 +46,16 @@ def infer_child_type(parent_level: str) -> str:
 # ----------------------------
 st.sidebar.subheader("Add Child Issue")
 
-parent_choices = [""] + st.session_state.df["ID"].tolist()
+parent_choices = [""] + st.session_state.df["ID"].astype(str).tolist()
 with st.sidebar.form("add_child_form"):
     parent_id = st.selectbox("Parent ID", options=parent_choices)
     child_name = st.text_input("Child Summary")
     submit = st.form_submit_button("Add Child")
 
 if submit and parent_id and child_name:
-    parent_row = st.session_state.df.loc[st.session_state.df["ID"] == parent_id]
+    parent_row = st.session_state.df.loc[st.session_state.df["ID"].astype(str) == parent_id]
     if not parent_row.empty:
-        parent_level = parent_row.iloc[0]["Level"]
+        parent_level = str(parent_row.iloc[0]["Level"])
         child_type = infer_child_type(parent_level)
         new_id = child_type[:2].upper() + str(pd.Timestamp.now().value)
         new_row = {
@@ -72,23 +72,42 @@ if submit and parent_id and child_name:
         st.sidebar.success(f"Added {child_type}: {child_name}")
 
 # ----------------------------
+# Clean and validate DataFrame
+# ----------------------------
+df = st.session_state.df.copy()
+df = df.fillna("")                       # replace NaN
+df["ID"] = df["ID"].astype(str).str.strip()
+df = df[df["ID"] != ""]                  # drop blank IDs
+df = df.drop_duplicates(subset=["ID"])   # ensure unique IDs
+st.session_state.df = df                 # save back
+
+# ----------------------------
 # Editable Table
 # ----------------------------
 st.subheader("Issue Table")
-edited = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
+edited = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 st.session_state.df = edited.fillna("")
 
 # ----------------------------
-# Build Cytoscape elements
+# Build Cytoscape elements safely
 # ----------------------------
 elements = []
+valid_ids = set(st.session_state.df["ID"].astype(str))
+
 for _, r in st.session_state.df.iterrows():
+    node_id = str(r["ID"]).strip()
+    if not node_id:
+        continue
     elements.append({
-        "data": {"id": r["ID"], "label": f"{r['Level']}: {r['Summary']}"},
-        "classes": r["Level"],
+        "data": {"id": node_id, "label": f"{r['Level']}: {r['Summary']}"},
+        "classes": str(r["Level"])
     })
-    if r["Parent ID"].strip():
-        elements.append({"data": {"source": r["Parent ID"], "target": r["ID"], "relation": "hierarchy"}})
+
+    parent_id = str(r["Parent ID"]).strip()
+    if parent_id and parent_id in valid_ids:
+        elements.append({
+            "data": {"source": parent_id, "target": node_id, "relation": "hierarchy"}
+        })
 
 stylesheet = [
     {"selector": "node", "style": {"label": "data(label)", "color": "white",
@@ -100,7 +119,8 @@ stylesheet = [
     {"selector": ".Task",     "style": {"background-color": "#7f7f7f", "width": 50, "height": 50, "shape": "triangle"}},
     {"selector": ".Sub-task", "style": {"background-color": "#9467bd", "width": 40, "height": 40, "shape": "hexagon"}},
     {"selector": "edge[relation = 'hierarchy']",
-     "style": {"curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#999", "target-arrow-color": "#999"}},
+     "style": {"curve-style": "bezier", "target-arrow-shape": "triangle",
+               "line-color": "#999", "target-arrow-color": "#999"}},
 ]
 
 # ----------------------------
