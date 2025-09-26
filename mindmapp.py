@@ -3,18 +3,18 @@ import streamlit as st
 import pandas as pd
 import json
 
-st.set_page_config(page_title="Mindmap (Context Menu Long-Press)", layout="wide")
-st.title("Mindmap MVP (Cytoscape + Context Menu)")
+st.set_page_config(page_title="Mindmap with Hierarchy + Prompt", layout="wide")
+st.title("Mindmap MVP (Interactive Canvas + Hierarchy Rules)")
 
 # ------------------------------------------------
-# Toggle: use local static files later (Posit)
+# Toggle: use local static files later (Posit Connect)
 # ------------------------------------------------
-USE_LOCAL = False  # set True when you place cytoscape.min.js in ./static/
+USE_LOCAL = False  # set True when you bundle cytoscape.min.js in ./static/
 
 CY_SRC = "static/cytoscape.min.js" if USE_LOCAL else "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
 
 # ------------------------------------------------
-# Sample data / table editing
+# Sample dataset / editable table
 # ------------------------------------------------
 DEFAULT_ROWS = [
     {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Parent ID": "", "Blocks": ""},
@@ -81,8 +81,7 @@ stylesheet = [
 ]
 
 # ------------------------------------------------
-# HTML embed with a custom context menu that works
-# on right-click (desktop) and long-press (mobile).
+# HTML embed with context menu (works desktop & mobile)
 # ------------------------------------------------
 html = f"""
 <!doctype html>
@@ -92,17 +91,15 @@ html = f"""
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="{CY_SRC}"></script>
   <style>
-    /* Make sure the canvas captures touch; avoid iOS callouts */
     #cy {{
       width: 100%;
       height: 700px;
       -webkit-touch-callout: none;
       -webkit-user-select: none;
       user-select: none;
-      touch-action: none; /* improves long-press reliability */
+      touch-action: none;
       background: #ffffff;
     }}
-    /* Simple custom context menu */
     #ctx {{
       position: absolute;
       display: none;
@@ -188,10 +185,28 @@ html = f"""
     // Menu actions
     addBtn.addEventListener('click', function() {{
       if (!lastNode) return;
-      var newId = 'N' + Date.now();
-      var p = lastNode.position();
-      cy.add({{ data: {{ id: newId, label: 'New Child' }}, position: {{ x: p.x + 60, y: p.y + 60 }} }});
-      cy.add({{ data: {{ source: lastNode.id(), target: newId, relation: 'hierarchy' }} }});
+
+      // hierarchy rule
+      var parentType = lastNode.classes()[0];
+      var childType = "Task";
+      if (parentType === "Use-Case") childType = "Epic";
+      else if (parentType === "Epic") childType = "Story";
+      else if (parentType === "Story") childType = "Task";
+      else if (parentType === "Task") childType = "Sub-task";
+
+      var name = prompt("Enter " + childType + " name:");
+      if (name) {{
+        var newId = childType.substring(0,2) + Date.now();
+        var p = lastNode.position();
+        cy.add({{
+          data: {{ id: newId, label: childType + ": " + name }},
+          classes: childType,
+          position: {{ x: p.x + 60, y: p.y + 60 }}
+        }});
+        cy.add({{
+          data: {{ source: lastNode.id(), target: newId, relation: 'hierarchy' }}
+        }});
+      }}
       hideMenu();
     }});
 
@@ -203,7 +218,7 @@ html = f"""
 
     cancelBtn.addEventListener('click', hideMenu);
 
-    // Prevent browser native context menu on the canvas
+    // Prevent browser native context menu
     cy.container().addEventListener('contextmenu', function(e) {{ e.preventDefault(); }});
   </script>
 </body>
@@ -213,5 +228,5 @@ html = f"""
 st.subheader("Mindmap Canvas (right-click or long-press a node)")
 st.components.v1.html(html, height=720, scrolling=True)
 
-# Export the exact same HTML you see
+# Export the exact HTML
 st.download_button("Export Interactive HTML", html, file_name="mindmap.html", mime="text/html")
