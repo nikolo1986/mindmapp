@@ -50,11 +50,11 @@ elements = []
 
 # Node style mapping
 STYLEMAP = {
-    "Use-Case": {"color": "#1f77b4", "shape": "ellipse", "size": 80},
-    "Epic": {"color": "#2ca02c", "shape": "round-rectangle", "size": 70},
-    "Story": {"color": "#ff7f0e", "shape": "diamond", "size": 60},
-    "Task": {"color": "#7f7f7f", "shape": "triangle", "size": 50},
-    "Sub-task": {"color": "#9467bd", "shape": "hexagon", "size": 40},
+    "Use-Case": {"color": "#1f77b4", "shape": "ellipse", "size": 80, "font": 18},
+    "Epic": {"color": "#2ca02c", "shape": "round-rectangle", "size": 70, "font": 16},
+    "Story": {"color": "#ff7f0e", "shape": "diamond", "size": 60, "font": 14},
+    "Task": {"color": "#7f7f7f", "shape": "triangle", "size": 50, "font": 12},
+    "Sub-task": {"color": "#9467bd", "shape": "hexagon", "size": 40, "font": 11},
 }
 
 for _, r in st.session_state.df.iterrows():
@@ -75,12 +75,22 @@ for _, r in st.session_state.df.iterrows():
 
 # Cytoscape stylesheet
 stylesheet = [
-    {"selector": "node", "style": {"label": "data(label)", "text-valign": "center", "text-halign": "center"}},
-    {"selector": ".Use-Case", "style": {"background-color": "#1f77b4", "width": 80, "height": 80, "shape": "ellipse"}},
-    {"selector": ".Epic", "style": {"background-color": "#2ca02c", "width": 70, "height": 70, "shape": "round-rectangle"}},
-    {"selector": ".Story", "style": {"background-color": "#ff7f0e", "width": 60, "height": 60, "shape": "diamond"}},
-    {"selector": ".Task", "style": {"background-color": "#7f7f7f", "width": 50, "height": 50, "shape": "triangle"}},
-    {"selector": ".Sub-task", "style": {"background-color": "#9467bd", "width": 40, "height": 40, "shape": "hexagon"}},
+    {
+        "selector": "node",
+        "style": {
+            "label": "data(label)",
+            "color": "white",                  # text color
+            "text-outline-color": "#000000",   # black outline
+            "text-outline-width": 2,
+            "text-valign": "center",
+            "text-halign": "center"
+        }
+    },
+    {"selector": ".Use-Case", "style": {"background-color": "#1f77b4", "width": 80, "height": 80, "shape": "ellipse", "font-size": 18}},
+    {"selector": ".Epic", "style": {"background-color": "#2ca02c", "width": 70, "height": 70, "shape": "round-rectangle", "font-size": 16}},
+    {"selector": ".Story", "style": {"background-color": "#ff7f0e", "width": 60, "height": 60, "shape": "diamond", "font-size": 14}},
+    {"selector": ".Task", "style": {"background-color": "#7f7f7f", "width": 50, "height": 50, "shape": "triangle", "font-size": 12}},
+    {"selector": ".Sub-task", "style": {"background-color": "#9467bd", "width": 40, "height": 40, "shape": "hexagon", "font-size": 11}},
     {"selector": "edge[relation = 'hierarchy']", "style": {"curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#999", "target-arrow-color": "#999"}},
     {"selector": "edge[relation = 'dependency']", "style": {"curve-style": "bezier", "target-arrow-shape": "vee", "line-color": "red", "target-arrow-color": "red", "line-style": "dashed"}},
 ]
