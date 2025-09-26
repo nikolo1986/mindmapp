@@ -1,21 +1,21 @@
-# streamlit run mindmap_html.py
 import streamlit as st
 import pandas as pd
 import json
 
-st.set_page_config(page_title="Mindmap MVP (Cytoscape Toggle)", layout="wide")
-st.title("Mindmap MVP (Cytoscape.js with Toggle for CDN/Local)")
+st.set_page_config(page_title="Mindmap with Context Menu", layout="wide")
+st.title("Mindmap MVP (Cytoscape.js + Context Menu)")
 
 # ----------------------------
-# Config: toggle between CDN and local static file
+# Config: toggle CDN vs Local
 # ----------------------------
-USE_LOCAL = False  # set True when cytoscape.min.js is downloaded to static/
+USE_LOCAL = False  # set True once you download JS files into static/
 
-cytoscape_src = (
-    "static/cytoscape.min.js"
-    if USE_LOCAL
-    else "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
-)
+if USE_LOCAL:
+    cytoscape_src = "static/cytoscape.min.js"
+    cxtmenu_src = "static/cytoscape-cxtmenu.min.js"
+else:
+    cytoscape_src = "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
+    cxtmenu_src = "https://unpkg.com/cytoscape-cxtmenu/cytoscape-cxtmenu.min.js"
 
 # ----------------------------
 # Default dataset
@@ -101,12 +101,13 @@ stylesheet = [
 ]
 
 # ----------------------------
-# HTML with toggle for Cytoscape source
+# HTML with Cytoscape + cxtmenu
 # ----------------------------
 html_str = f"""
 <html>
 <head>
   <script src="{cytoscape_src}"></script>
+  <script src="{cxtmenu_src}"></script>
 </head>
 <body>
   <div id="cy" style="width: 100%; height: 700px;"></div>
@@ -119,24 +120,37 @@ html_str = f"""
       wheelSensitivity: 0.2
     }});
 
-    // Add child node on right-click/long-press
-    cy.on('cxttap', 'node', function(evt){{
-      var node = evt.target;
-      var newId = "N" + Date.now();
-      cy.add({{
-        data: {{ id: newId, label: "New Child" }},
-        position: {{ x: node.position('x') + 60, y: node.position('y') + 60 }}
-      }});
-      cy.add({{
-        data: {{ source: node.id(), target: newId, relation: "hierarchy" }}
-      }});
+    // Context menu on right-click/long-press
+    cy.cxtmenu({{
+      selector: 'node',
+      commands: [
+        {{
+          content: 'Add Child',
+          select: function(ele) {{
+            var newId = "N" + Date.now();
+            cy.add({{
+              data: {{ id: newId, label: "New Child" }},
+              position: {{ x: ele.position('x') + 60, y: ele.position('y') + 60 }}
+            }});
+            cy.add({{
+              data: {{ source: ele.id(), target: newId, relation: "hierarchy" }}
+            }});
+          }}
+        }},
+        {{
+          content: 'Delete Node',
+          select: function(ele) {{
+            cy.remove(ele);
+          }}
+        }}
+      ]
     }});
   </script>
 </body>
 </html>
 """
 
-st.subheader("Mindmap Canvas (Interactive)")
+st.subheader("Mindmap Canvas (Interactive with Context Menu)")
 st.components.v1.html(html_str, height=720, scrolling=True)
 
 # ----------------------------
