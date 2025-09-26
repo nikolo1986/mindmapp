@@ -3,12 +3,23 @@ import streamlit as st
 import pandas as pd
 import json
 
-st.set_page_config(page_title="Mindmap MVP (HTML Cytoscape)", layout="wide")
-st.title("Mindmap MVP (Direct Cytoscape.js Embed)")
+st.set_page_config(page_title="Mindmap MVP (Cytoscape Toggle)", layout="wide")
+st.title("Mindmap MVP (Cytoscape.js with Toggle for CDN/Local)")
 
-# -----------------------------------
+# ----------------------------
+# Config: toggle between CDN and local static file
+# ----------------------------
+USE_LOCAL = False  # set True when cytoscape.min.js is downloaded to static/
+
+cytoscape_src = (
+    "static/cytoscape.min.js"
+    if USE_LOCAL
+    else "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
+)
+
+# ----------------------------
 # Default dataset
-# -----------------------------------
+# ----------------------------
 DEFAULT_ROWS = [
     {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Parent ID": "", "Blocks": ""},
     {"ID": "E1",  "Level": "Epic",     "Summary": "Authentication", "Parent ID": "UC1", "Blocks": ""},
@@ -20,9 +31,9 @@ DEFAULT_ROWS = [
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
 
-# -----------------------------------
+# ----------------------------
 # Sidebar: CSV import/export
-# -----------------------------------
+# ----------------------------
 st.sidebar.header("Import / Export")
 uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 if uploaded:
@@ -32,9 +43,9 @@ if uploaded:
 csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
 st.sidebar.download_button("Export CSV", csv_bytes, file_name="mindmap.csv", mime="text/csv")
 
-# -----------------------------------
+# ----------------------------
 # Table editor
-# -----------------------------------
+# ----------------------------
 st.subheader("Issue Table")
 edited_df = st.data_editor(
     st.session_state.df,
@@ -43,12 +54,10 @@ edited_df = st.data_editor(
 )
 st.session_state.df = edited_df.fillna("")
 
-# -----------------------------------
+# ----------------------------
 # Build Cytoscape elements
-# -----------------------------------
+# ----------------------------
 elements = []
-
-# Node style mapping
 STYLEMAP = {
     "Use-Case": {"color": "#1f77b4", "shape": "ellipse", "size": 80, "font": 18},
     "Epic": {"color": "#2ca02c", "shape": "round-rectangle", "size": 70, "font": 16},
@@ -58,29 +67,25 @@ STYLEMAP = {
 }
 
 for _, r in st.session_state.df.iterrows():
-    style = STYLEMAP.get(r["Level"], STYLEMAP["Task"])
     elements.append({
         "data": {"id": r["ID"], "label": f"{r['Level']}: {r['Summary']}"},
         "classes": r["Level"],
     })
-    # parent-child edge
     if r["Parent ID"].strip():
         elements.append({"data": {"source": r["Parent ID"], "target": r["ID"], "relation": "hierarchy"}})
-    # blockers
     if r["Blocks"].strip():
         for tgt in str(r["Blocks"]).split(";"):
             tgt = tgt.strip()
             if tgt:
                 elements.append({"data": {"source": r["ID"], "target": tgt, "relation": "dependency"}})
 
-# Cytoscape stylesheet
 stylesheet = [
     {
         "selector": "node",
         "style": {
             "label": "data(label)",
-            "color": "white",                  # text color
-            "text-outline-color": "#000000",   # black outline
+            "color": "white",
+            "text-outline-color": "#000000",
             "text-outline-width": 2,
             "text-valign": "center",
             "text-halign": "center"
@@ -95,13 +100,13 @@ stylesheet = [
     {"selector": "edge[relation = 'dependency']", "style": {"curve-style": "bezier", "target-arrow-shape": "vee", "line-color": "red", "target-arrow-color": "red", "line-style": "dashed"}},
 ]
 
-# -----------------------------------
-# Embed Cytoscape.js directly
-# -----------------------------------
+# ----------------------------
+# HTML with toggle for Cytoscape source
+# ----------------------------
 html_str = f"""
 <html>
 <head>
-  <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+  <script src="{cytoscape_src}"></script>
 </head>
 <body>
   <div id="cy" style="width: 100%; height: 700px;"></div>
@@ -113,15 +118,28 @@ html_str = f"""
       layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }},
       wheelSensitivity: 0.2
     }});
+
+    // Add child node on right-click/long-press
+    cy.on('cxttap', 'node', function(evt){{
+      var node = evt.target;
+      var newId = "N" + Date.now();
+      cy.add({{
+        data: {{ id: newId, label: "New Child" }},
+        position: {{ x: node.position('x') + 60, y: node.position('y') + 60 }}
+      }});
+      cy.add({{
+        data: {{ source: node.id(), target: newId, relation: "hierarchy" }}
+      }});
+    }});
   </script>
 </body>
 </html>
 """
 
-st.subheader("Mindmap Canvas")
+st.subheader("Mindmap Canvas (Interactive)")
 st.components.v1.html(html_str, height=720, scrolling=True)
 
-# -----------------------------------
+# ----------------------------
 # Export HTML
-# -----------------------------------
+# ----------------------------
 st.download_button("Export Interactive HTML", html_str, file_name="mindmap.html", mime="text/html")
