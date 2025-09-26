@@ -4,8 +4,8 @@ import pandas as pd
 import json
 from streamlit_js_eval import streamlit_js_eval
 
-st.set_page_config(page_title="Mindmap (Prompt in Python)", layout="wide")
-st.title("Mindmap MVP (Press & Hold → Add Child)")
+st.set_page_config(page_title="Mindmap (Add Child)", layout="wide")
+st.title("Mindmap MVP (Press & Hold / Double-Tap → Add Child)")
 
 USE_LOCAL = False
 CY_SRC = "static/cytoscape.min.js" if USE_LOCAL else "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
@@ -18,9 +18,6 @@ DEFAULT_ROWS = [
 ]
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
-
-if "selected_parent" not in st.session_state:
-    st.session_state.selected_parent = ""
 
 # ----------------------------
 # Import / Export
@@ -77,7 +74,7 @@ stylesheet = [
 ]
 
 # ----------------------------
-# HTML (send only parentId)
+# HTML (send only parentId on events)
 # ----------------------------
 html = f"""
 <!doctype html>
@@ -100,7 +97,7 @@ html = f"""
       window.parent.postMessage({{ isStreamlitMessage: true, parentId: pid }}, "*");
     }}
 
-    cy.on('cxttap taphold', 'node', function(e) {{
+    cy.on('taphold dbltap cxttap', 'node', function(e) {{
       sendParentId(e.target.id());
     }});
   </script>
@@ -108,7 +105,7 @@ html = f"""
 </html>
 """
 
-st.subheader("Mindmap Canvas (press & hold / right-click to add child)")
+st.subheader("Mindmap Canvas (double-tap / long-press / right-click to add child)")
 st.components.v1.html(html, height=720, scrolling=True)
 
 # ----------------------------
@@ -121,7 +118,6 @@ if parent_id:
     if not parent_row.empty:
         parent_level = parent_row.iloc[0]["Level"]
         child_type = infer_child_type(parent_level)
-        # open a JS prompt from Python
         child_name = streamlit_js_eval(
             js_expressions=f"prompt('Enter {child_type} name for parent {parent_id}:')",
             key="childPrompt"
