@@ -1,21 +1,21 @@
-# streamlit run mindmap_html.py
+# streamlit run mindmap.py
 import streamlit as st
 import pandas as pd
 import json
-from streamlit_js_eval import streamlit_js_eval
 
-st.set_page_config(page_title="Mindmap (Add Child)", layout="wide")
-st.title("Mindmap MVP (Press & Hold / Double-Tap → Add Child)")
+st.set_page_config(page_title="Mindmap (Sidebar Add Child)", layout="wide")
+st.title("Mindmap MVP (Sidebar Add Child → Table → Canvas)")
 
-USE_LOCAL = False
-CY_SRC = "static/cytoscape.min.js" if USE_LOCAL else "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
-
+# ----------------------------
+# Default dataset
+# ----------------------------
 DEFAULT_ROWS = [
     {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Parent ID": "", "Blocks": ""},
     {"ID": "E1",  "Level": "Epic",     "Summary": "Authentication", "Parent ID": "UC1", "Blocks": ""},
     {"ID": "S1",  "Level": "Story",    "Summary": "As a user I want to log in", "Parent ID": "E1", "Blocks": ""},
     {"ID": "T1",  "Level": "Task",     "Summary": "Build login form", "Parent ID": "S1", "Blocks": ""},
 ]
+
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
 
@@ -40,6 +40,36 @@ def infer_child_type(parent_level: str) -> str:
     if parent_level == "Story": return "Task"
     if parent_level == "Task": return "Sub-task"
     return "Task"
+
+# ----------------------------
+# Sidebar Add Child Form
+# ----------------------------
+st.sidebar.subheader("Add Child Issue")
+
+parent_choices = [""] + st.session_state.df["ID"].tolist()
+with st.sidebar.form("add_child_form"):
+    parent_id = st.selectbox("Parent ID", options=parent_choices)
+    child_name = st.text_input("Child Summary")
+    submit = st.form_submit_button("Add Child")
+
+if submit and parent_id and child_name:
+    parent_row = st.session_state.df.loc[st.session_state.df["ID"] == parent_id]
+    if not parent_row.empty:
+        parent_level = parent_row.iloc[0]["Level"]
+        child_type = infer_child_type(parent_level)
+        new_id = child_type[:2].upper() + str(pd.Timestamp.now().value)
+        new_row = {
+            "ID": new_id,
+            "Level": child_type,
+            "Summary": child_name,
+            "Parent ID": parent_id,
+            "Blocks": ""
+        }
+        st.session_state.df = pd.concat(
+            [st.session_state.df, pd.DataFrame([new_row])],
+            ignore_index=True
+        )
+        st.sidebar.success(f"Added {child_type}: {child_name}")
 
 # ----------------------------
 # Editable Table
@@ -74,8 +104,10 @@ stylesheet = [
 ]
 
 # ----------------------------
-# HTML (send only parentId on events)
+# Render Cytoscape
 # ----------------------------
+CY_SRC = "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
+
 html = f"""
 <!doctype html>
 <html>
@@ -86,50 +118,16 @@ html = f"""
 <body>
   <div id="cy"></div>
   <script>
-    var cy = cytoscape({{
+    cytoscape({{
       container: document.getElementById('cy'),
       elements: {json.dumps(elements)},
       style: {json.dumps(stylesheet)},
       layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }}
-    }});
-
-    function sendParentId(pid) {{
-      window.parent.postMessage({{ isStreamlitMessage: true, parentId: pid }}, "*");
-    }}
-
-    cy.on('taphold dbltap cxttap', 'node', function(e) {{
-      sendParentId(e.target.id());
     }});
   </script>
 </body>
 </html>
 """
 
-st.subheader("Mindmap Canvas (double-tap / long-press / right-click to add child)")
+st.subheader("Mindmap Canvas")
 st.components.v1.html(html, height=720, scrolling=True)
-
-# ----------------------------
-# Bridge: get parentId, then prompt for childName in Python
-# ----------------------------
-parent_id = streamlit_js_eval(js_expressions="parentId", key="pid")
-
-if parent_id:
-    parent_row = st.session_state.df.loc[st.session_state.df["ID"] == parent_id]
-    if not parent_row.empty:
-        parent_level = parent_row.iloc[0]["Level"]
-        child_type = infer_child_type(parent_level)
-        child_name = streamlit_js_eval(
-            js_expressions=f"prompt('Enter {child_type} name for parent {parent_id}:')",
-            key="childPrompt"
-        )
-        if child_name:
-            new_id = child_type[:2].upper() + str(pd.Timestamp.now().value)
-            new_row = {
-                "ID": new_id,
-                "Level": child_type,
-                "Summary": child_name,
-                "Parent ID": parent_id,
-                "Blocks": ""
-            }
-            st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-            st.success(f"Added {child_type}: {child_name} under {parent_id}")
