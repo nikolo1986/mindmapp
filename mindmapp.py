@@ -3,8 +3,8 @@ import json
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Mindmap MVP", layout="wide")
-st.title("Mindmap MVP — Sidebar Create/Edit → Map + CSV")
+st.set_page_config(page_title="Mindmapp MVP", layout="wide")
+st.title("Mindmapp MVP")
 
 # ----------------------------
 # Helpers
@@ -169,7 +169,7 @@ html = f"""
 </html>
 """
 
-st.subheader("Mindmap Canvas (450px)")
+st.subheader("Mindmap Canvas")
 st.components.v1.html(html, height=500, scrolling=True)
 
 # ----------------------------
