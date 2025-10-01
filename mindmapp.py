@@ -1,4 +1,3 @@
-# streamlit run mindmap.py
 import json
 import pandas as pd
 import streamlit as st
@@ -52,7 +51,6 @@ st.session_state.df = df
 # Sidebar: Add Issue
 # ----------------------------
 st.sidebar.header("Add Issue")
-
 with st.sidebar.form("add_issue_form"):
     level = st.selectbox("Issue Type", options=ISSUE_TYPES, index=2)
     summary = st.text_input("Summary")
@@ -65,24 +63,27 @@ with st.sidebar.form("add_issue_form"):
 
 if submit and summary:
     new_id = id_prefix(level) + str(pd.Timestamp.now().value)
-    new_row = {
-        "ID": new_id,
-        "Level": level,
-        "Summary": summary,
-        "Epic Name": epic_name if level == "Epic" else "",
-        "Parent ID": parent_id,
-        "Blocks": ""
-    }
-    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-    st.sidebar.success(f"Added {level}: {summary}")
+    if new_id in st.session_state.df["ID"].values:
+        st.sidebar.error("Duplicate ID, try again")
+    else:
+        new_row = {
+            "ID": new_id,
+            "Level": level,
+            "Summary": summary,
+            "Epic Name": epic_name if level == "Epic" else "",
+            "Parent ID": parent_id,
+            "Blocks": ""
+        }
+        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+        st.sidebar.success(f"Added {level}: {summary}")
+        st.experimental_rerun()
 
 # ----------------------------
 # Sidebar: Edit Issue
 # ----------------------------
 st.sidebar.header("Edit Issue")
-
 id_options = [""] + st.session_state.df["ID"].astype(str).tolist()
-edit_id = st.sidebar.selectbox("Select ID", options=id_options)
+edit_id = st.sidebar.selectbox("Select ID to Edit", options=id_options)
 
 if edit_id:
     row = st.session_state.df.loc[st.session_state.df["ID"].astype(str) == edit_id]
@@ -98,6 +99,18 @@ if edit_id:
             st.session_state.df.at[idx, "Summary"] = new_summary
             st.session_state.df.at[idx, "Epic Name"] = new_epic
             st.sidebar.success("Updated")
+            st.experimental_rerun()
+
+# ----------------------------
+# Sidebar: Delete Issue
+# ----------------------------
+st.sidebar.header("Delete Issue")
+delete_id = st.sidebar.selectbox("Select ID to Delete", options=[""] + st.session_state.df["ID"].astype(str).tolist())
+if delete_id:
+    if st.sidebar.button("Delete Selected Issue"):
+        st.session_state.df = st.session_state.df[st.session_state.df["ID"] != delete_id].reset_index(drop=True)
+        st.sidebar.success(f"Deleted issue {delete_id}")
+        st.experimental_rerun()
 
 # ----------------------------
 # Issue Table
@@ -147,7 +160,6 @@ stylesheet.append({
 # Render Cytoscape
 # ----------------------------
 CY_SRC = "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
-
 html = f"""
 <!doctype html>
 <html>
@@ -168,7 +180,6 @@ html = f"""
 </body>
 </html>
 """
-
 st.subheader("Mindmap Canvas")
 st.components.v1.html(html, height=500, scrolling=True)
 
