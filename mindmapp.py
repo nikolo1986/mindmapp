@@ -261,8 +261,10 @@ stylesheet.append({
     "style": {
         "line-style": "dashed",
         "line-color": "red",
+        "curve-style": "bezier",            # ensures arrows display properly
         "target-arrow-shape": "triangle",
         "target-arrow-color": "red",
+        "arrow-scale": 1.5,
         "label": "blocks",
         "font-size": 10,
         "color": "red",
