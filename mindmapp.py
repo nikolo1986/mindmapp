@@ -82,7 +82,6 @@ if st.session_state.get("show_clear_confirm", False):
 # ----------------------------
 st.sidebar.subheader("Add Issue")
 
-# Type picker OUTSIDE the form so UI updates live
 level = st.sidebar.selectbox("Issue Type", options=ISSUE_TYPES, index=2, key="add_level")
 
 with st.sidebar.form("add_issue_form", clear_on_submit=True):
@@ -259,8 +258,19 @@ stylesheet.append({
 })
 stylesheet.append({
     "selector": "edge[relation = 'blocks']",
-    "style": {"line-style": "dashed", "line-color": "red",
-              "target-arrow-shape": "tee", "target-arrow-color": "red"}
+    "style": {
+        "line-style": "dashed",
+        "line-color": "red",
+        "target-arrow-shape": "triangle",
+        "target-arrow-color": "red",
+        "label": "blocks",
+        "font-size": 10,
+        "color": "red",
+        "text-rotation": "autorotate",
+        "text-background-color": "white",
+        "text-background-opacity": 1,
+        "text-background-padding": "2px"
+    }
 })
 
 # ----------------------------
@@ -289,6 +299,24 @@ html = f"""
 """
 st.subheader("Mindmap Canvas")
 st.components.v1.html(html, height=500, scrolling=True)
+
+# ----------------------------
+# Legend
+# ----------------------------
+st.markdown("### Legend")
+legend_md = """
+- **Shapes / Colors**
+  - 🟦 Ellipse (blue) = Use-Case  
+  - 🟩 Round-rectangle (green) = Epic  
+  - 🟧 Diamond (orange) = Story  
+  - ⚪ Triangle (gray) = Task  
+  - 🟪 Hexagon (purple) = Sub-task  
+
+- **Edges**
+  - ➡️ **Solid gray arrow** = hierarchy (Parent → Child)  
+  - ➡️ **Dashed red arrow labeled 'blocks'** = blocking relationship (Issue → Blocked Issue)  
+"""
+st.markdown(legend_md)
 
 # ----------------------------
 # Export/Import CSV
