@@ -64,11 +64,19 @@ if st.sidebar.button("Reset to Defaults", type="secondary"):
 # ----------------------------
 st.sidebar.subheader("Add Issue")
 with st.sidebar.form("add_issue_form", clear_on_submit=True):
-    level = st.selectbox("Issue Type", options=ISSUE_TYPES, index=2)
-    summary = st.text_input("Summary")
-    epic_name = st.text_input("Epic Name (for Jira)") if level == "Epic" else ""
+    level = st.selectbox("Issue Type", options=ISSUE_TYPES, index=2, key="add_level")
+    summary = st.text_input("Summary", key="add_summary")
+
+    # Epic Name field only for Epics; clear when switching away
+    if level == "Epic":
+        epic_name = st.text_input("Epic Name (for Jira)", key="epic_name_input")
+    else:
+        epic_name = ""
+        if "epic_name_input" in st.session_state:
+            del st.session_state["epic_name_input"]
+
     parent_choices = [""] + st.session_state.df["ID"].astype(str).tolist()
-    parent_id = st.selectbox("Parent ID", options=parent_choices)
+    parent_id = st.selectbox("Parent ID", options=parent_choices, key="add_parent")
     submit_add = st.form_submit_button("Add")
 
 if submit_add and summary.strip():
@@ -98,7 +106,7 @@ if edit_id:
         idx = row.index[0]
         new_summary = st.sidebar.text_area("Summary", value=row.iloc[0]["Summary"], height=80)
         if row.iloc[0]["Level"] == "Epic":
-            new_epic = st.sidebar.text_input("Epic Name", value=row.iloc[0]["Epic Name"])
+            new_epic = st.sidebar.text_input("Epic Name", value=row.iloc[0]["Epic Name"], key="edit_epic")
         else:
             new_epic = row.iloc[0]["Epic Name"]
 
