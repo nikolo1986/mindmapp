@@ -55,13 +55,25 @@ st.session_state.df = normalize_df(st.session_state.df)
 st.sidebar.header("Controls")
 
 col1, col2 = st.sidebar.columns(2)
+
 with col1:
     if st.button("Reset to Defaults"):
         st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
         st.rerun()
+
 with col2:
-    if st.button("Clear All Issues", type="primary"):
+    if st.button("Clear All Issues", type="primary", key="clear_all"):
+        st.session_state.show_clear_confirm = True
+
+# Confirmation for Clear All
+if st.session_state.get("show_clear_confirm", False):
+    st.sidebar.error("⚠️ This will delete ALL issues!")
+    if st.sidebar.button("Yes, Clear Everything", key="confirm_clear"):
         st.session_state.df = pd.DataFrame(columns=["ID","Level","Summary","Epic Name","Parent ID","Blocks"])
+        st.session_state.show_clear_confirm = False
+        st.rerun()
+    if st.sidebar.button("Cancel", key="cancel_clear"):
+        st.session_state.show_clear_confirm = False
         st.rerun()
 
 # ----------------------------
@@ -75,7 +87,6 @@ level = st.sidebar.selectbox("Issue Type", options=ISSUE_TYPES, index=2, key="ad
 with st.sidebar.form("add_issue_form", clear_on_submit=True):
     summary = st.text_input("Summary", key="add_summary")
 
-    # Epic Name only when Epic is selected
     epic_name = ""
     if level == "Epic":
         epic_name = st.text_input("Epic Name (for Jira)", key="epic_name_input")
@@ -128,7 +139,7 @@ if edit_id:
             st.rerun()
 
 # ----------------------------
-# Delete Issue (with cascade option)
+# Delete Issue (with cascade option + confirm)
 # ----------------------------
 st.sidebar.subheader("Delete Issue")
 delete_id = st.sidebar.selectbox(
@@ -143,29 +154,46 @@ delete_mode = st.sidebar.radio(
 )
 
 if delete_id and st.sidebar.button("Delete Selected Issue", type="primary"):
-    df = st.session_state.df.copy()
-
+    # For cascade, ask confirmation
     if delete_mode == "Cascade (delete children too)":
-        # Collect all descendants recursively
-        to_delete = set([delete_id])
-        found = True
-        while found:
-            found = False
-            children = df[df["Parent ID"].isin(to_delete)]["ID"].tolist()
-            new = [c for c in children if c not in to_delete]
-            if new:
-                to_delete.update(new)
-                found = True
-        df = df[~df["ID"].isin(to_delete)].reset_index(drop=True)
-        st.sidebar.success(f"Deleted {len(to_delete)} issues (cascade)")
+        st.session_state.pending_delete = {"id": delete_id, "mode": "cascade"}
+    else:
+        st.session_state.pending_delete = {"id": delete_id, "mode": "single"}
 
-    else:  # only delete the node itself
-        df = df[df["ID"] != delete_id].reset_index(drop=True)
-        df.loc[df["Parent ID"] == delete_id, "Parent ID"] = ""
-        st.sidebar.success(f"Deleted issue {delete_id}")
+# Handle confirm delete
+if st.session_state.get("pending_delete"):
+    mode = st.session_state.pending_delete["mode"]
+    did = st.session_state.pending_delete["id"]
 
-    st.session_state.df = normalize_df(df)
-    st.rerun()
+    st.sidebar.error(
+        f"⚠️ Confirm delete: {did} ({'and all descendants' if mode=='cascade' else 'only'})"
+    )
+    if st.sidebar.button("Yes, Delete", key="confirm_delete"):
+        df = st.session_state.df.copy()
+        if mode == "cascade":
+            to_delete = set([did])
+            found = True
+            while found:
+                found = False
+                children = df[df["Parent ID"].isin(to_delete)]["ID"].tolist()
+                new = [c for c in children if c not in to_delete]
+                if new:
+                    to_delete.update(new)
+                    found = True
+            df = df[~df["ID"].isin(to_delete)].reset_index(drop=True)
+            st.sidebar.success(f"Deleted {len(to_delete)} issues (cascade)")
+        else:
+            df = df[df["ID"] != did].reset_index(drop=True)
+            df.loc[df["Parent ID"] == did, "Parent ID"] = ""
+            st.sidebar.success(f"Deleted issue {did}")
+
+        st.session_state.df = normalize_df(df)
+        st.session_state.pending_delete = None
+        st.rerun()
+
+    if st.sidebar.button("Cancel Delete", key="cancel_delete"):
+        st.session_state.pending_delete = None
+        st.rerun()
 
 # ----------------------------
 # Issue Table
