@@ -27,6 +27,14 @@ COLOR_SHAPE = {
     "Sub-task": {"color": "#9467bd", "shape": "hexagon",         "w": 40, "h": 40},
 }
 
+def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure consistent formatting of dataframe."""
+    df = df.copy().fillna("")
+    df["ID"] = df["ID"].astype(str).str.strip()
+    df["Parent ID"] = df["Parent ID"].astype(str).str.strip()
+    df = df[df["ID"] != ""].drop_duplicates(subset=["ID"])
+    return df
+
 # ----------------------------
 # Defaults
 # ----------------------------
@@ -39,54 +47,53 @@ DEFAULT_ROWS = [
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
 
-# ----------------------------
-# Clean DF
-# ----------------------------
-df = st.session_state.df.copy().fillna("")
-df["ID"] = df["ID"].astype(str).str.strip()
-df = df[df["ID"] != ""].drop_duplicates(subset=["ID"])
-st.session_state.df = df
+st.session_state.df = normalize_df(st.session_state.df)
 
 # ----------------------------
-# Sidebar: Add Issue
+# Sidebar Actions
 # ----------------------------
-st.sidebar.header("Add Issue")
-with st.sidebar.form("add_issue_form"):
+st.sidebar.header("Controls")
+
+# Reset
+if st.sidebar.button("Reset to Defaults", type="secondary"):
+    st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
+    st.rerun()
+
+# ----------------------------
+# Add Issue
+# ----------------------------
+st.sidebar.subheader("Add Issue")
+with st.sidebar.form("add_issue_form", clear_on_submit=True):
     level = st.selectbox("Issue Type", options=ISSUE_TYPES, index=2)
     summary = st.text_input("Summary")
-    epic_name = ""
-    if level == "Epic":
-        epic_name = st.text_input("Epic Name (for Jira)")
+    epic_name = st.text_input("Epic Name (for Jira)") if level == "Epic" else ""
     parent_choices = [""] + st.session_state.df["ID"].astype(str).tolist()
     parent_id = st.selectbox("Parent ID", options=parent_choices)
-    submit = st.form_submit_button("Add")
+    submit_add = st.form_submit_button("Add")
 
-if submit and summary:
-    new_id = id_prefix(level) + str(pd.Timestamp.now().value)
-    if new_id in st.session_state.df["ID"].values:
-        st.sidebar.error("Duplicate ID, try again")
-    else:
-        new_row = {
-            "ID": new_id,
-            "Level": level,
-            "Summary": summary,
-            "Epic Name": epic_name if level == "Epic" else "",
-            "Parent ID": parent_id,
-            "Blocks": ""
-        }
-        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-        st.sidebar.success(f"Added {level}: {summary}")
-        st.experimental_rerun()
+if submit_add and summary.strip():
+    new_id = id_prefix(level) + str(pd.Timestamp.utcnow().value)
+    new_row = {
+        "ID": new_id,
+        "Level": level,
+        "Summary": summary.strip(),
+        "Epic Name": epic_name.strip() if level == "Epic" else "",
+        "Parent ID": parent_id,
+        "Blocks": ""
+    }
+    st.session_state.df = normalize_df(pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True))
+    st.sidebar.success(f"Added {level}: {summary.strip()}")
+    st.rerun()
 
 # ----------------------------
-# Sidebar: Edit Issue
+# Edit Issue
 # ----------------------------
-st.sidebar.header("Edit Issue")
+st.sidebar.subheader("Edit Issue")
 id_options = [""] + st.session_state.df["ID"].astype(str).tolist()
 edit_id = st.sidebar.selectbox("Select ID to Edit", options=id_options)
 
 if edit_id:
-    row = st.session_state.df.loc[st.session_state.df["ID"].astype(str) == edit_id]
+    row = st.session_state.df.loc[st.session_state.df["ID"] == edit_id]
     if not row.empty:
         idx = row.index[0]
         new_summary = st.sidebar.text_area("Summary", value=row.iloc[0]["Summary"], height=80)
@@ -99,43 +106,53 @@ if edit_id:
             st.session_state.df.at[idx, "Summary"] = new_summary
             st.session_state.df.at[idx, "Epic Name"] = new_epic
             st.sidebar.success("Updated")
-            st.experimental_rerun()
+            st.rerun()
 
 # ----------------------------
-# Sidebar: Delete Issue
+# Delete Issue
 # ----------------------------
-st.sidebar.header("Delete Issue")
+st.sidebar.subheader("Delete Issue")
 delete_id = st.sidebar.selectbox("Select ID to Delete", options=[""] + st.session_state.df["ID"].astype(str).tolist())
-if delete_id:
-    if st.sidebar.button("Delete Selected Issue"):
-        st.session_state.df = st.session_state.df[st.session_state.df["ID"] != delete_id].reset_index(drop=True)
-        st.sidebar.success(f"Deleted issue {delete_id}")
-        st.experimental_rerun()
+clear_refs = st.sidebar.checkbox("Clear children pointing to this", value=True)
+
+if delete_id and st.sidebar.button("Delete Selected Issue", type="primary"):
+    df = st.session_state.df.copy()
+    df = df[df["ID"] != delete_id].reset_index(drop=True)
+    if clear_refs:
+        df.loc[df["Parent ID"] == delete_id, "Parent ID"] = ""
+    st.session_state.df = normalize_df(df)
+    st.sidebar.success(f"Deleted issue {delete_id}")
+    st.rerun()
 
 # ----------------------------
 # Issue Table
 # ----------------------------
-st.subheader("Issue Table (structure edits)")
+st.subheader("Issue Table (editable)")
 edited = st.data_editor(
     st.session_state.df,
     num_rows="dynamic",
-    use_container_width=True
+    use_container_width=True,
+    key="editor",
+    column_config={
+        "Level": st.column_config.SelectboxColumn("Level", options=ISSUE_TYPES),
+        "Parent ID": st.column_config.SelectboxColumn("Parent ID", options=[""] + st.session_state.df["ID"].astype(str).tolist())
+    }
 )
-st.session_state.df = edited.fillna("")
+st.session_state.df = normalize_df(edited)
 
 # ----------------------------
-# Build Cytoscape elements
+# Build Cytoscape Elements
 # ----------------------------
 elements = []
 valid_ids = set(st.session_state.df["ID"])
 
 for _, r in st.session_state.df.iterrows():
-    node_id = str(r["ID"])
+    node_id = r["ID"]
     elements.append({
         "data": {"id": node_id, "label": f"{r['Level']}: {r['Summary']}"},
         "classes": r["Level"],
     })
-    parent_id = str(r["Parent ID"]).strip()
+    parent_id = r["Parent ID"].strip()
     if parent_id and parent_id in valid_ids:
         elements.append({"data": {"source": parent_id, "target": node_id, "relation": "hierarchy"}})
 
@@ -188,3 +205,11 @@ st.components.v1.html(html, height=500, scrolling=True)
 # ----------------------------
 csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
 st.sidebar.download_button("Download CSV", csv_bytes, "mindmap.csv", "text/csv")
+
+# Import CSV
+file = st.sidebar.file_uploader("Upload CSV to replace table", type=["csv"])
+if file is not None:
+    uploaded = pd.read_csv(file, dtype=str)
+    st.session_state.df = normalize_df(uploaded)
+    st.sidebar.success("Table replaced from CSV.")
+    st.rerun()
