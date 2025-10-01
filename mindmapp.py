@@ -32,6 +32,7 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy().fillna("")
     df["ID"] = df["ID"].astype(str).str.strip()
     df["Parent ID"] = df["Parent ID"].astype(str).str.strip()
+    df["Blocks"] = df["Blocks"].astype(str).str.strip()
     df = df[df["ID"] != ""].drop_duplicates(subset=["ID"])
     return df
 
@@ -97,6 +98,8 @@ with st.sidebar.form("add_issue_form", clear_on_submit=True):
     parent_choices = [""] + st.session_state.df["ID"].astype(str).tolist()
     parent_id = st.selectbox("Parent ID", options=parent_choices, key="add_parent")
 
+    blocks = st.text_input("Blocks (comma-separated IDs)", key="add_blocks")
+
     submit_add = st.form_submit_button("Add")
 
 if submit_add and summary.strip():
@@ -107,7 +110,7 @@ if submit_add and summary.strip():
         "Summary": summary.strip(),
         "Epic Name": epic_name.strip() if level == "Epic" else "",
         "Parent ID": parent_id,
-        "Blocks": ""
+        "Blocks": blocks.strip()
     }
     st.session_state.df = normalize_df(
         pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
@@ -132,9 +135,12 @@ if edit_id:
         else:
             new_epic = row.iloc[0]["Epic Name"]
 
+        new_blocks = st.sidebar.text_input("Blocks (comma-separated IDs)", value=row.iloc[0]["Blocks"], key="edit_blocks")
+
         if st.sidebar.button("Save Changes"):
             st.session_state.df.at[idx, "Summary"] = new_summary
             st.session_state.df.at[idx, "Epic Name"] = new_epic
+            st.session_state.df.at[idx, "Blocks"] = new_blocks
             st.sidebar.success("Updated")
             st.rerun()
 
@@ -154,7 +160,6 @@ delete_mode = st.sidebar.radio(
 )
 
 if delete_id and st.sidebar.button("Delete Selected Issue", type="primary"):
-    # For cascade, ask confirmation
     if delete_mode == "Cascade (delete children too)":
         st.session_state.pending_delete = {"id": delete_id, "mode": "cascade"}
     else:
@@ -223,9 +228,18 @@ for _, r in st.session_state.df.iterrows():
         "data": {"id": node_id, "label": f"{r['Level']}: {r['Summary']}"},
         "classes": r["Level"],
     })
+
+    # Parent/child
     parent_id = r["Parent ID"].strip()
     if parent_id and parent_id in valid_ids:
         elements.append({"data": {"source": parent_id, "target": node_id, "relation": "hierarchy"}})
+
+    # Blocks edges
+    blocks = str(r["Blocks"]).strip()
+    if blocks:
+        for blocked in [b.strip() for b in blocks.split(",") if b.strip()]:
+            if blocked in valid_ids:
+                elements.append({"data": {"source": node_id, "target": blocked, "relation": "blocks"}})
 
 stylesheet = [
     {"selector": "node", "style": {"label": "data(label)", "color": "white",
@@ -242,6 +256,11 @@ stylesheet.append({
     "selector": "edge[relation = 'hierarchy']",
     "style": {"curve-style": "bezier", "target-arrow-shape": "triangle",
               "line-color": "#999", "target-arrow-color": "#999"}
+})
+stylesheet.append({
+    "selector": "edge[relation = 'blocks']",
+    "style": {"line-style": "dashed", "line-color": "red",
+              "target-arrow-shape": "tee", "target-arrow-color": "red"}
 })
 
 # ----------------------------
