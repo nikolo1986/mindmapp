@@ -50,7 +50,7 @@ if "df" not in st.session_state:
 st.session_state.df = normalize_df(st.session_state.df)
 
 # ----------------------------
-# Sidebar Actions
+# Sidebar Controls
 # ----------------------------
 st.sidebar.header("Controls")
 
@@ -109,19 +109,43 @@ if edit_id:
             st.rerun()
 
 # ----------------------------
-# Delete Issue
+# Delete Issue (with cascade option)
 # ----------------------------
 st.sidebar.subheader("Delete Issue")
-delete_id = st.sidebar.selectbox("Select ID to Delete", options=[""] + st.session_state.df["ID"].astype(str).tolist())
-clear_refs = st.sidebar.checkbox("Clear children pointing to this", value=True)
+delete_id = st.sidebar.selectbox(
+    "Select ID to Delete",
+    options=[""] + st.session_state.df["ID"].astype(str).tolist()
+)
+
+delete_mode = st.sidebar.radio(
+    "Delete Mode",
+    ["Just this issue (children remain)", "Cascade (delete children too)"],
+    index=0
+)
 
 if delete_id and st.sidebar.button("Delete Selected Issue", type="primary"):
     df = st.session_state.df.copy()
-    df = df[df["ID"] != delete_id].reset_index(drop=True)
-    if clear_refs:
+
+    if delete_mode == "Cascade (delete children too)":
+        # Collect all descendants recursively
+        to_delete = set([delete_id])
+        found = True
+        while found:
+            found = False
+            children = df[df["Parent ID"].isin(to_delete)]["ID"].tolist()
+            new = [c for c in children if c not in to_delete]
+            if new:
+                to_delete.update(new)
+                found = True
+        df = df[~df["ID"].isin(to_delete)].reset_index(drop=True)
+        st.sidebar.success(f"Deleted {len(to_delete)} issues (cascade)")
+
+    else:  # only delete the node itself
+        df = df[df["ID"] != delete_id].reset_index(drop=True)
         df.loc[df["Parent ID"] == delete_id, "Parent ID"] = ""
+        st.sidebar.success(f"Deleted issue {delete_id}")
+
     st.session_state.df = normalize_df(df)
-    st.sidebar.success(f"Deleted issue {delete_id}")
     st.rerun()
 
 # ----------------------------
