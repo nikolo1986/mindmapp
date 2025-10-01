@@ -54,29 +54,38 @@ st.session_state.df = normalize_df(st.session_state.df)
 # ----------------------------
 st.sidebar.header("Controls")
 
-# Reset
-if st.sidebar.button("Reset to Defaults", type="secondary"):
-    st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
-    st.rerun()
+col1, col2 = st.sidebar.columns(2)
+with col1:
+    if st.button("Reset to Defaults"):
+        st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
+        st.rerun()
+with col2:
+    if st.button("Clear All Issues", type="primary"):
+        st.session_state.df = pd.DataFrame(columns=["ID","Level","Summary","Epic Name","Parent ID","Blocks"])
+        st.rerun()
 
 # ----------------------------
 # Add Issue
 # ----------------------------
 st.sidebar.subheader("Add Issue")
+
+# Type picker OUTSIDE the form so UI updates live
+level = st.sidebar.selectbox("Issue Type", options=ISSUE_TYPES, index=2, key="add_level")
+
 with st.sidebar.form("add_issue_form", clear_on_submit=True):
-    level = st.selectbox("Issue Type", options=ISSUE_TYPES, index=2, key="add_level")
     summary = st.text_input("Summary", key="add_summary")
 
-    # Epic Name field only for Epics; clear when switching away
+    # Epic Name only when Epic is selected
+    epic_name = ""
     if level == "Epic":
         epic_name = st.text_input("Epic Name (for Jira)", key="epic_name_input")
     else:
-        epic_name = ""
         if "epic_name_input" in st.session_state:
             del st.session_state["epic_name_input"]
 
     parent_choices = [""] + st.session_state.df["ID"].astype(str).tolist()
     parent_id = st.selectbox("Parent ID", options=parent_choices, key="add_parent")
+
     submit_add = st.form_submit_button("Add")
 
 if submit_add and summary.strip():
@@ -89,7 +98,9 @@ if submit_add and summary.strip():
         "Parent ID": parent_id,
         "Blocks": ""
     }
-    st.session_state.df = normalize_df(pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True))
+    st.session_state.df = normalize_df(
+        pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+    )
     st.sidebar.success(f"Added {level}: {summary.strip()}")
     st.rerun()
 
@@ -233,12 +244,11 @@ st.subheader("Mindmap Canvas")
 st.components.v1.html(html, height=500, scrolling=True)
 
 # ----------------------------
-# Export CSV
+# Export/Import CSV
 # ----------------------------
 csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
 st.sidebar.download_button("Download CSV", csv_bytes, "mindmap.csv", "text/csv")
 
-# Import CSV
 file = st.sidebar.file_uploader("Upload CSV to replace table", type=["csv"])
 if file is not None:
     uploaded = pd.read_csv(file, dtype=str)
