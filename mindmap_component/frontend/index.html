@@ -60,8 +60,11 @@
       this._post({ type: "streamlit:componentReady", apiVersion: 1 });
     },
     _onMessage: function (event) {
+      // Streamlit's actual RENDER message (parent -> component) does NOT set
+      // isStreamlitMessage, only messages we send (component -> parent) do,
+      // so we can only gate on "type" here.
       var data = event.data;
-      if (!data || !data.isStreamlitMessage) return;
+      if (!data) return;
       if (data.type === "streamlit:render") {
         this._emit("render", data);
       }
