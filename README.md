@@ -17,6 +17,7 @@ Switch to **Live Jira connection** mode to reveal the **Jira Connection** sectio
 2. Adjust **Issue Type Mapping** if your project's issue type names differ from `Use-Case` / `Epic` / `Story` / `Task` / `Sub-task`.
 3. **Pull from Jira** loads issues matching the JQL query into the table (tracked by their Jira key).
 4. **Push to Jira** creates any local issues that don't yet have a Jira key, updates summaries on ones that do, and (re)creates "blocks" and "relates to" issue links.
+5. **Pull an Issue + Its Subtree** loads one specific issue (by Jira key, e.g. `MMP-1`) plus every child, grandchild, etc. underneath it — the issue doesn't need to already be in the table. Merges into the existing table rather than replacing it.
 
 Each issue has a **Relates To** field (comma-separated IDs) alongside **Blocks**, synced via Jira's built-in "Relates" link type — e.g. use it to mark that a Task satisfies a Story in the same Epic.
 
