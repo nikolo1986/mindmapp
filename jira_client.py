@@ -48,18 +48,19 @@ class JiraClient:
                 return f["id"]
         return None
 
-    def blocks_link_type_name(self):
+    def link_type_name(self, name):
         types = self._request("GET", "issueLinkType").json().get("issueLinkTypes", [])
         for lt in types:
-            if lt.get("name", "").lower() == "blocks":
+            if lt.get("name", "").lower() == name.lower():
                 return lt["name"]
-        return types[0]["name"] if types else None
+        return None
 
     def discover_schema(self):
         return {
             "epic_name_field": self.field_id_by_name("Epic Name"),
             "epic_link_field": self.field_id_by_name("Epic Link"),
-            "blocks_link_type": self.blocks_link_type_name(),
+            "blocks_link_type": self.link_type_name("Blocks"),
+            "relates_link_type": self.link_type_name("Relates"),
         }
 
     def search_issues(self, jql, max_results=500, page_size=100):

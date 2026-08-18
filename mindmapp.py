@@ -45,9 +45,12 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy().fillna("")
     if "Jira Key" not in df.columns:
         df["Jira Key"] = ""
+    if "Relates To" not in df.columns:
+        df["Relates To"] = ""
     df["ID"] = df["ID"].astype(str).str.strip()
     df["Parent ID"] = df["Parent ID"].astype(str).str.strip()
     df["Blocks"] = df["Blocks"].astype(str).str.strip()
+    df["Relates To"] = df["Relates To"].astype(str).str.strip()
     df["Jira Key"] = df["Jira Key"].astype(str).str.strip()
     df = df[df["ID"] != ""].drop_duplicates(subset=["ID"])
     return df
@@ -56,9 +59,10 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 # Defaults
 # ----------------------------
 DEFAULT_ROWS = [
-    {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Epic Name": "", "Parent ID": "", "Blocks": "", "Jira Key": ""},
-    {"ID": "E1",  "Level": "Epic",     "Summary": "Authentication Epic", "Epic Name": "Auth Epic", "Parent ID": "UC1", "Blocks": "", "Jira Key": ""},
-    {"ID": "S1",  "Level": "Story",    "Summary": "As a user, I can log in", "Epic Name": "", "Parent ID": "E1", "Blocks": "", "Jira Key": ""},
+    {"ID": "UC1", "Level": "Use-Case", "Summary": "User Login", "Epic Name": "", "Parent ID": "", "Blocks": "", "Relates To": "", "Jira Key": ""},
+    {"ID": "E1",  "Level": "Epic",     "Summary": "Authentication Epic", "Epic Name": "Auth Epic", "Parent ID": "UC1", "Blocks": "", "Relates To": "", "Jira Key": ""},
+    {"ID": "S1",  "Level": "Story",    "Summary": "As a user, I can log in", "Epic Name": "", "Parent ID": "E1", "Blocks": "", "Relates To": "", "Jira Key": ""},
+    {"ID": "T1",  "Level": "Task",     "Summary": "Build login form", "Epic Name": "", "Parent ID": "E1", "Blocks": "", "Relates To": "S1", "Jira Key": ""},
 ]
 
 # ----------------------------
@@ -103,12 +107,17 @@ def pull_from_jira(client, jql, type_map, schema):
             parent_id = fields[schema["epic_link_field"]]
 
         blocks = []
+        relates = []
         for link in fields.get("issuelinks", []) or []:
-            if link.get("type", {}).get("name", "").lower() != "blocks":
-                continue
-            outward = link.get("outwardIssue")
-            if outward:
-                blocks.append(outward["key"])
+            link_type_name = link.get("type", {}).get("name", "").lower()
+            if link_type_name == "blocks":
+                outward = link.get("outwardIssue")
+                if outward:
+                    blocks.append(outward["key"])
+            elif link_type_name == "relates":
+                other = link.get("outwardIssue") or link.get("inwardIssue")
+                if other:
+                    relates.append(other["key"])
 
         rows.append({
             "ID": key,
@@ -117,9 +126,10 @@ def pull_from_jira(client, jql, type_map, schema):
             "Epic Name": epic_name,
             "Parent ID": parent_id,
             "Blocks": ",".join(blocks),
+            "Relates To": ",".join(relates),
             "Jira Key": key,
         })
-    return pd.DataFrame(rows, columns=["ID", "Level", "Summary", "Epic Name", "Parent ID", "Blocks", "Jira Key"])
+    return pd.DataFrame(rows, columns=["ID", "Level", "Summary", "Epic Name", "Parent ID", "Blocks", "Relates To", "Jira Key"])
 
 def push_to_jira(client, project_key, df, type_map, schema):
     df = df.copy()
@@ -172,6 +182,9 @@ def push_to_jira(client, project_key, df, type_map, schema):
     df["Blocks"] = df["Blocks"].apply(
         lambda s: ",".join(id_map.get(b.strip(), b.strip()) for b in str(s).split(",") if b.strip())
     )
+    df["Relates To"] = df["Relates To"].apply(
+        lambda s: ",".join(id_map.get(b.strip(), b.strip()) for b in str(s).split(",") if b.strip())
+    )
 
     already_synced_idx = [i for i in df.index if i not in order and df.at[i, "Jira Key"]]
     for idx in already_synced_idx:
@@ -189,6 +202,16 @@ def push_to_jira(client, project_key, df, type_map, schema):
             for blocked in [b.strip() for b in str(row["Blocks"]).split(",") if b.strip()]:
                 try:
                     client.create_link(row["Jira Key"], blocked, schema["blocks_link_type"])
+                except JiraError:
+                    pass
+
+    if schema.get("relates_link_type"):
+        for _, row in df.iterrows():
+            if not row["Jira Key"]:
+                continue
+            for related in [b.strip() for b in str(row["Relates To"]).split(",") if b.strip()]:
+                try:
+                    client.create_link(row["Jira Key"], related, schema["relates_link_type"])
                 except JiraError:
                     pass
 
@@ -219,7 +242,7 @@ with col2:
 if st.session_state.get("show_clear_confirm", False):
     st.sidebar.error("⚠️ This will delete ALL issues!")
     if st.sidebar.button("Yes, Clear Everything", key="confirm_clear"):
-        st.session_state.df = pd.DataFrame(columns=["ID","Level","Summary","Epic Name","Parent ID","Blocks","Jira Key"])
+        st.session_state.df = pd.DataFrame(columns=["ID","Level","Summary","Epic Name","Parent ID","Blocks","Relates To","Jira Key"])
         st.session_state.show_clear_confirm = False
         st.rerun()
     if st.sidebar.button("Cancel", key="cancel_clear"):
@@ -343,6 +366,7 @@ with st.sidebar.form("add_issue_form", clear_on_submit=True):
     parent_id = st.selectbox("Parent ID", options=parent_choices, key="add_parent")
 
     blocks = st.text_input("Blocks (comma-separated IDs)", key="add_blocks")
+    relates_to = st.text_input("Relates To (comma-separated IDs)", key="add_relates_to")
 
     submit_add = st.form_submit_button("Add")
 
@@ -355,6 +379,7 @@ if submit_add and summary.strip():
         "Epic Name": epic_name.strip() if level == "Epic" else "",
         "Parent ID": parent_id,
         "Blocks": blocks.strip(),
+        "Relates To": relates_to.strip(),
         "Jira Key": ""
     }
     st.session_state.df = normalize_df(
@@ -381,11 +406,13 @@ if edit_id:
             new_epic = row.iloc[0]["Epic Name"]
 
         new_blocks = st.sidebar.text_input("Blocks (comma-separated IDs)", value=row.iloc[0]["Blocks"], key="edit_blocks")
+        new_relates_to = st.sidebar.text_input("Relates To (comma-separated IDs)", value=row.iloc[0]["Relates To"], key="edit_relates_to")
 
         if st.sidebar.button("Save Changes"):
             st.session_state.df.at[idx, "Summary"] = new_summary
             st.session_state.df.at[idx, "Epic Name"] = new_epic
             st.session_state.df.at[idx, "Blocks"] = new_blocks
+            st.session_state.df.at[idx, "Relates To"] = new_relates_to
             st.sidebar.success("Updated")
             st.rerun()
 
@@ -467,6 +494,7 @@ st.session_state.df = normalize_df(edited)
 # ----------------------------
 elements = []
 valid_ids = set(st.session_state.df["ID"])
+seen_relates = set()
 
 for _, r in st.session_state.df.iterrows():
     node_id = r["ID"]
@@ -487,6 +515,16 @@ for _, r in st.session_state.df.iterrows():
         for blocked in [b.strip() for b in blocks.split(",") if b.strip()]:
             if blocked in valid_ids:
                 elements.append({"data": {"source": node_id, "target": blocked, "relation": "blocks"}})
+
+    # Relates To edges (symmetric, so draw each pair only once)
+    relates_to = str(r["Relates To"]).strip()
+    if relates_to:
+        for related in [b.strip() for b in relates_to.split(",") if b.strip()]:
+            if related in valid_ids:
+                pair = frozenset((node_id, related))
+                if pair not in seen_relates:
+                    seen_relates.add(pair)
+                    elements.append({"data": {"source": node_id, "target": related, "relation": "relates"}})
 
 stylesheet = [
     {"selector": "node", "style": {"label": "data(label)", "color": "white",
@@ -516,6 +554,24 @@ stylesheet.append({
         "label": "blocks",
         "font-size": 10,
         "color": "red",
+        "text-rotation": "autorotate",
+        "text-background-color": "white",
+        "text-background-opacity": 1,
+        "text-background-padding": "2px"
+    }
+})
+stylesheet.append({
+    "selector": "edge[relation = 'relates']",
+    "style": {
+        "line-style": "dotted",
+        "line-color": "#1f77b4",
+        "curve-style": "bezier",
+        "target-arrow-shape": "none",
+        "source-arrow-shape": "none",
+        "width": 2,
+        "label": "relates to",
+        "font-size": 10,
+        "color": "#1f77b4",
         "text-rotation": "autorotate",
         "text-background-color": "white",
         "text-background-opacity": 1,
@@ -563,8 +619,9 @@ legend_md = """
   - 🟪 Hexagon (purple) = Sub-task  
 
 - **Edges**
-  - ➡️ **Solid gray arrow** = hierarchy (Parent → Child)  
-  - ➡️ **Dashed red arrow labeled 'blocks'** = blocking relationship (Issue → Blocked Issue)  
+  - ➡️ **Solid gray arrow** = hierarchy (Parent → Child)
+  - ➡️ **Dashed red arrow labeled 'blocks'** = blocking relationship (Issue → Blocked Issue)
+  - 🔵 **Dotted blue line labeled 'relates to'** = e.g. a Task that satisfies a Story, synced via Jira's "Relates" link
 """
 st.markdown(legend_md)
 
