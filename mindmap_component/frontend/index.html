@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape/dist/cytoscape.min.js" onerror="window.__cytoscapeLoadFailed = true;"></script>
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; }
   #wrap { display: flex; height: 100%; }
@@ -173,11 +173,28 @@
     });
   }
 
+  function showCanvasError(container, message) {
+    container.innerHTML =
+      '<div style="padding:16px;color:#b00020;font-size:13px;line-height:1.5;">' +
+      "⚠️ " + message +
+      "</div>";
+  }
+
   function renderGraph(args) {
     var container = document.getElementById("cy");
     if (cy) {
       cy.destroy();
       cy = null;
+    }
+
+    if (window.__cytoscapeLoadFailed || typeof cytoscape === "undefined") {
+      showCanvasError(
+        container,
+        "The graph library (Cytoscape.js) failed to load from its CDN, so the canvas can't render. " +
+        "This is usually a network/ad-blocker issue on this device or network, not a bug in your data. " +
+        "Try a different network, disable content blockers for this site, or reload."
+      );
+      return;
     }
 
     var positions = args.positions || {};
@@ -186,14 +203,19 @@
       .filter(function (el) { return el.data && el.data.id; })
       .every(function (el) { return positions[el.data.id]; });
 
-    cy = cytoscape({
-      container: container,
-      elements: elements,
-      style: args.stylesheet || [],
-      layout: hasAllPositions
-        ? { name: "preset", positions: function (n) { return positions[n.id()]; } }
-        : { name: "breadthfirst", directed: true, spacingFactor: 1.5 }
-    });
+    try {
+      cy = cytoscape({
+        container: container,
+        elements: elements,
+        style: args.stylesheet || [],
+        layout: hasAllPositions
+          ? { name: "preset", positions: function (n) { return positions[n.id()]; } }
+          : { name: "breadthfirst", directed: true, spacingFactor: 1.5 }
+      });
+    } catch (err) {
+      showCanvasError(container, "Failed to render the canvas: " + err.message);
+      return;
+    }
 
     cy.on("tap", "node", function (evt) {
       sendEvent({ kind: "select", id: evt.target.id() });

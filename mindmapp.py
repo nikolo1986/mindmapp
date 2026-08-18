@@ -323,9 +323,19 @@ with col2:
     if st.button("Clear All Issues", type="primary", key="clear_all"):
         st.session_state.show_clear_confirm = True
 
+st.sidebar.caption(
+    "Clearing only empties this local canvas/table — it never deletes or changes anything in Jira. "
+    "Bring your issues back afterward with **Pull from Jira** (Live Jira mode) or **Upload CSV or Excel** "
+    "further down the sidebar."
+)
+
 # Confirmation for Clear All
 if st.session_state.get("show_clear_confirm", False):
-    st.sidebar.error("⚠️ This will delete ALL issues!")
+    st.sidebar.error(
+        "⚠️ Are you sure? This will delete all issues from this local canvas/table.\n\n"
+        "This does **not** touch anything in Jira — only the local copy shown here. "
+        "You can bring issues back afterward with Pull from Jira or Upload CSV/Excel."
+    )
     if st.sidebar.button("Yes, Clear Everything", key="confirm_clear"):
         st.session_state.df = pd.DataFrame(columns=["ID","Level","Summary","Epic Name","Parent ID","Blocks","Relates To","Jira Key"])
         st.session_state.show_clear_confirm = False
