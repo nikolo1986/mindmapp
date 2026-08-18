@@ -1,3 +1,4 @@
+import io
 import json
 import pandas as pd
 import streamlit as st
@@ -6,6 +7,16 @@ from jira_client import JiraClient, JiraError
 
 st.set_page_config(page_title="Mindmapp MVP", layout="wide")
 st.title("Mindmapp MVP")
+
+if "connection_mode" not in st.session_state:
+    st.session_state.connection_mode = "CSV / Excel only (no Jira account needed)"
+
+st.session_state.connection_mode = st.sidebar.radio(
+    "Connection Mode",
+    ["CSV / Excel only (no Jira account needed)", "Live Jira connection"],
+    index=["CSV / Excel only (no Jira account needed)", "Live Jira connection"].index(st.session_state.connection_mode),
+)
+JIRA_MODE = st.session_state.connection_mode == "Live Jira connection"
 
 # ----------------------------
 # Helpers
@@ -211,8 +222,6 @@ if st.session_state.get("show_clear_confirm", False):
 # ----------------------------
 # Jira Connection
 # ----------------------------
-st.sidebar.header("Jira Connection")
-
 if "jira_config" not in st.session_state:
     st.session_state.jira_config = {}
 if "jira_type_map" not in st.session_state:
@@ -220,86 +229,89 @@ if "jira_type_map" not in st.session_state:
 if "jira_schema" not in st.session_state:
     st.session_state.jira_schema = {}
 
-with st.sidebar.expander("Site & Credentials", expanded=not st.session_state.jira_config.get("base_url")):
-    base_url = st.text_input("Jira Base URL", value=st.session_state.jira_config.get("base_url", ""),
-                              placeholder="https://yourcompany.atlassian.net")
-    auth_label = st.selectbox("Auth Type", ["Jira Cloud (email + API token)", "Jira Server / Data Center (PAT)"])
-    auth_mode = "cloud" if auth_label.startswith("Jira Cloud") else "server"
+if JIRA_MODE:
+    st.sidebar.header("Jira Connection")
 
-    email = st.session_state.jira_config.get("email", "")
-    if auth_mode == "cloud":
-        email = st.text_input("Email", value=email)
-        token_label = "API Token"
-    else:
-        token_label = "Personal Access Token"
-    api_token = st.text_input(token_label, value=st.session_state.jira_config.get("api_token", ""), type="password")
+    with st.sidebar.expander("Site & Credentials", expanded=not st.session_state.jira_config.get("base_url")):
+        base_url = st.text_input("Jira Base URL", value=st.session_state.jira_config.get("base_url", ""),
+                                  placeholder="https://yourcompany.atlassian.net")
+        auth_label = st.selectbox("Auth Type", ["Jira Cloud (email + API token)", "Jira Server / Data Center (PAT)"])
+        auth_mode = "cloud" if auth_label.startswith("Jira Cloud") else "server"
 
-    project_key = st.text_input("Project Key", value=st.session_state.jira_config.get("project_key", ""),
-                                 placeholder="e.g. MMP")
-
-    if st.button("Save & Test Connection"):
-        cfg = {
-            "base_url": base_url.strip(),
-            "auth_mode": auth_mode,
-            "email": email.strip(),
-            "api_token": api_token,
-            "project_key": project_key.strip(),
-        }
-        st.session_state.jira_config = cfg
-        try:
-            client = jira_client_from_config(cfg)
-            if client is None:
-                st.error("Base URL and API token/PAT are required.")
-            else:
-                me = client.test_connection()
-                st.session_state.jira_schema = client.discover_schema()
-                st.success(f"Connected as {me.get('displayName', me.get('emailAddress', 'unknown user'))}")
-        except JiraError as e:
-            st.error(str(e))
-
-with st.sidebar.expander("Issue Type Mapping"):
-    st.caption("Map each Mindmapp level to the matching Jira issue type name in your project.")
-    for lvl in ISSUE_TYPES:
-        st.session_state.jira_type_map[lvl] = st.text_input(
-            lvl, value=st.session_state.jira_type_map.get(lvl, lvl), key=f"type_map_{lvl}"
-        )
-
-st.sidebar.subheader("Jira Sync")
-jql_default = f"project = {st.session_state.jira_config.get('project_key', '')} ORDER BY created ASC"
-pull_jql = st.sidebar.text_area("Pull JQL", value=jql_default, height=70)
-
-pcol1, pcol2 = st.sidebar.columns(2)
-with pcol1:
-    if st.button("Pull from Jira"):
-        client = jira_client_from_config(st.session_state.jira_config)
-        if client is None:
-            st.sidebar.error("Configure and test the Jira connection first.")
+        email = st.session_state.jira_config.get("email", "")
+        if auth_mode == "cloud":
+            email = st.text_input("Email", value=email)
+            token_label = "API Token"
         else:
+            token_label = "Personal Access Token"
+        api_token = st.text_input(token_label, value=st.session_state.jira_config.get("api_token", ""), type="password")
+
+        project_key = st.text_input("Project Key", value=st.session_state.jira_config.get("project_key", ""),
+                                     placeholder="e.g. MMP")
+
+        if st.button("Save & Test Connection"):
+            cfg = {
+                "base_url": base_url.strip(),
+                "auth_mode": auth_mode,
+                "email": email.strip(),
+                "api_token": api_token,
+                "project_key": project_key.strip(),
+            }
+            st.session_state.jira_config = cfg
             try:
-                pulled = pull_from_jira(client, pull_jql, st.session_state.jira_type_map, st.session_state.jira_schema)
-                st.session_state.df = normalize_df(pulled)
-                st.sidebar.success(f"Pulled {len(pulled)} issues from Jira")
-                st.rerun()
+                client = jira_client_from_config(cfg)
+                if client is None:
+                    st.error("Base URL and API token/PAT are required.")
+                else:
+                    me = client.test_connection()
+                    st.session_state.jira_schema = client.discover_schema()
+                    st.success(f"Connected as {me.get('displayName', me.get('emailAddress', 'unknown user'))}")
             except JiraError as e:
-                st.sidebar.error(str(e))
+                st.error(str(e))
 
-with pcol2:
-    if st.button("Push to Jira", type="primary"):
-        client = jira_client_from_config(st.session_state.jira_config)
-        project_key = st.session_state.jira_config.get("project_key")
-        if client is None or not project_key:
-            st.sidebar.error("Configure and test the Jira connection first.")
-        else:
-            new_df, created, updated, errors = push_to_jira(
-                client, project_key, st.session_state.df,
-                st.session_state.jira_type_map, st.session_state.jira_schema
+    with st.sidebar.expander("Issue Type Mapping"):
+        st.caption("Map each Mindmapp level to the matching Jira issue type name in your project.")
+        for lvl in ISSUE_TYPES:
+            st.session_state.jira_type_map[lvl] = st.text_input(
+                lvl, value=st.session_state.jira_type_map.get(lvl, lvl), key=f"type_map_{lvl}"
             )
-            st.session_state.df = new_df
-            if created or updated:
-                st.sidebar.success(f"Created {created}, updated {updated} issue(s) in Jira")
-            for err in errors:
-                st.sidebar.error(err)
-            st.rerun()
+
+    st.sidebar.subheader("Jira Sync")
+    jql_default = f"project = {st.session_state.jira_config.get('project_key', '')} ORDER BY created ASC"
+    pull_jql = st.sidebar.text_area("Pull JQL", value=jql_default, height=70)
+
+    pcol1, pcol2 = st.sidebar.columns(2)
+    with pcol1:
+        if st.button("Pull from Jira"):
+            client = jira_client_from_config(st.session_state.jira_config)
+            if client is None:
+                st.sidebar.error("Configure and test the Jira connection first.")
+            else:
+                try:
+                    pulled = pull_from_jira(client, pull_jql, st.session_state.jira_type_map, st.session_state.jira_schema)
+                    st.session_state.df = normalize_df(pulled)
+                    st.sidebar.success(f"Pulled {len(pulled)} issues from Jira")
+                    st.rerun()
+                except JiraError as e:
+                    st.sidebar.error(str(e))
+
+    with pcol2:
+        if st.button("Push to Jira", type="primary"):
+            client = jira_client_from_config(st.session_state.jira_config)
+            project_key = st.session_state.jira_config.get("project_key")
+            if client is None or not project_key:
+                st.sidebar.error("Configure and test the Jira connection first.")
+            else:
+                new_df, created, updated, errors = push_to_jira(
+                    client, project_key, st.session_state.df,
+                    st.session_state.jira_type_map, st.session_state.jira_schema
+                )
+                st.session_state.df = new_df
+                if created or updated:
+                    st.sidebar.success(f"Created {created}, updated {updated} issue(s) in Jira")
+                for err in errors:
+                    st.sidebar.error(err)
+                st.rerun()
 
 # ----------------------------
 # Add Issue
@@ -548,14 +560,29 @@ legend_md = """
 st.markdown(legend_md)
 
 # ----------------------------
-# Export/Import CSV
+# Export/Import CSV & Excel
 # ----------------------------
-csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
-st.sidebar.download_button("Download CSV", csv_bytes, "mindmap.csv", "text/csv")
+st.sidebar.subheader("Export / Import")
 
-file = st.sidebar.file_uploader("Upload CSV to replace table", type=["csv"])
+csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
+xlsx_buf = io.BytesIO()
+st.session_state.df.to_excel(xlsx_buf, index=False, sheet_name="Issues")
+
+ecol1, ecol2 = st.sidebar.columns(2)
+with ecol1:
+    st.download_button("Download CSV", csv_bytes, "mindmap.csv", "text/csv")
+with ecol2:
+    st.download_button(
+        "Download Excel", xlsx_buf.getvalue(), "mindmap.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+file = st.sidebar.file_uploader("Upload CSV or Excel to replace table", type=["csv", "xlsx"])
 if file is not None:
-    uploaded = pd.read_csv(file, dtype=str)
+    if file.name.lower().endswith(".xlsx"):
+        uploaded = pd.read_excel(file, dtype=str)
+    else:
+        uploaded = pd.read_csv(file, dtype=str)
     st.session_state.df = normalize_df(uploaded)
-    st.sidebar.success("Table replaced from CSV.")
+    st.sidebar.success(f"Table replaced from {file.name}.")
     st.rerun()
