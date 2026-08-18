@@ -1,9 +1,9 @@
 import io
+import json
 import pandas as pd
 import streamlit as st
 
 from jira_client import JiraClient, JiraError
-from mindmap_component import mindmap_canvas
 
 st.set_page_config(page_title="Mindmapp MVP", layout="wide")
 st.title("Mindmapp MVP")
@@ -80,12 +80,6 @@ def descendant_ids(df, root_id):
             result.update(new)
             found = True
     return result
-
-def would_create_cycle(df, child_id, new_parent_id):
-    """True if setting new_parent_id as child_id's parent would create a loop."""
-    if child_id == new_parent_id:
-        return True
-    return new_parent_id in descendant_ids(df, child_id)
 
 def find_data_issues(df):
     """Dangling references and parent cycles, as human-readable messages."""
@@ -300,10 +294,6 @@ if "df" not in st.session_state:
 
 st.session_state.df = normalize_df(st.session_state.df)
 
-if "node_positions" not in st.session_state:
-    st.session_state.node_positions = {}
-if "last_mindmap_event_id" not in st.session_state:
-    st.session_state.last_mindmap_event_id = None
 if "mindmap_focus" not in st.session_state:
     st.session_state.mindmap_focus = ""
 
@@ -598,69 +588,32 @@ STYLESHEET.append({
 })
 
 elements = build_elements(display_df)
-canvas_positions = {k: v for k, v in st.session_state.node_positions.items() if k in set(display_df["ID"])}
 
 # ----------------------------
-# Interactive canvas + event handling
+# Render Cytoscape (static — use the sidebar Add/Edit/Delete forms below to change the tree)
 # ----------------------------
-mm_event = mindmap_canvas(
-    elements=elements,
-    stylesheet=STYLESHEET,
-    issue_types=ISSUE_TYPES,
-    color_shape=COLOR_SHAPE,
-    positions=canvas_positions,
-    height=520,
-    key="mindmap_canvas",
-)
-
-if mm_event and mm_event.get("event_id") != st.session_state.last_mindmap_event_id:
-    st.session_state.last_mindmap_event_id = mm_event["event_id"]
-    kind = mm_event.get("kind")
-
-    if kind == "select":
-        clicked_id = mm_event.get("id")
-        if clicked_id in set(st.session_state.df["ID"]):
-            st.session_state["edit_id_select"] = clicked_id
-            st.session_state["delete_id_select"] = clicked_id
-
-    elif kind == "create":
-        level = mm_event.get("level")
-        if level in ISSUE_TYPES:
-            new_id = id_prefix(level) + str(pd.Timestamp.utcnow().value)
-            new_row = {
-                "ID": new_id, "Level": level, "Summary": f"New {level}", "Epic Name": "",
-                "Parent ID": "", "Blocks": "", "Relates To": "", "Jira Key": "",
-            }
-            st.session_state.df = normalize_df(
-                pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-            )
-            if "x" in mm_event and "y" in mm_event:
-                st.session_state.node_positions[new_id] = {"x": mm_event["x"], "y": mm_event["y"]}
-            st.session_state["edit_id_select"] = new_id
-            st.info(f"Created {level} '{new_id}' — rename it in Edit Issue in the sidebar.")
-
-    elif kind == "reparent":
-        child_id, new_parent_id = mm_event.get("sourceId"), mm_event.get("targetId")
-        ids = set(st.session_state.df["ID"])
-        if child_id in ids and new_parent_id in ids:
-            if would_create_cycle(st.session_state.df, child_id, new_parent_id):
-                st.error(f"Can't set {new_parent_id} as {child_id}'s parent — that would create a cycle.")
-            else:
-                st.session_state.df.loc[st.session_state.df["ID"] == child_id, "Parent ID"] = new_parent_id
-
-    elif kind == "relate":
-        a_id, b_id = mm_event.get("sourceId"), mm_event.get("targetId")
-        ids = set(st.session_state.df["ID"])
-        if a_id in ids and b_id in ids:
-            row = st.session_state.df.loc[st.session_state.df["ID"] == a_id].iloc[0]
-            existing = [x.strip() for x in row["Relates To"].split(",") if x.strip()]
-            if b_id not in existing:
-                existing.append(b_id)
-                st.session_state.df.loc[st.session_state.df["ID"] == a_id, "Relates To"] = ",".join(existing)
-
-    elif kind == "layout":
-        for node_id, pos in (mm_event.get("positions") or {}).items():
-            st.session_state.node_positions[node_id] = pos
+CY_SRC = "https://cdn.jsdelivr.net/npm/cytoscape/dist/cytoscape.min.js"
+html = f"""
+<!doctype html>
+<html>
+<head>
+  <script src="{CY_SRC}"></script>
+  <style>#cy {{ width:100%; height:450px; background:#fff; }}</style>
+</head>
+<body>
+  <div id="cy"></div>
+  <script>
+    cytoscape({{
+      container: document.getElementById('cy'),
+      elements: {json.dumps(elements)},
+      style: {json.dumps(STYLESHEET)},
+      layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }}
+    }});
+  </script>
+</body>
+</html>
+"""
+st.components.v1.html(html, height=500, scrolling=True)
 
 # ----------------------------
 # Add Issue
@@ -830,12 +783,7 @@ legend_md = """
   - ➡️ **Dashed red arrow labeled 'blocks'** = blocking relationship (Issue → Blocked Issue)
   - 🔵 **Dotted blue line labeled 'relates to'** = e.g. a Task that satisfies a Story, synced via Jira's "Relates" link
 
-- **Canvas interactions**
-  - Drag a chip from the left palette onto empty canvas to create a new issue there
-  - Drag one node onto another to set the dragged node's Parent ID
-  - Hold **Shift** while dragging one node onto another to add a "relates to" link instead
-  - Click a node to select it for editing/deleting in the sidebar
-  - Dragging a node to empty space just repositions it (remembered between reruns)
+The canvas below is a **read-only visualization** — use **Add Issue** / **Edit Issue** / **Delete Issue** in the sidebar, or the editable table below, to change the tree. It updates as soon as you make a change.
 """
 st.markdown(legend_md)
 
