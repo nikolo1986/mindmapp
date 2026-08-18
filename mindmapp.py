@@ -430,6 +430,34 @@ if JIRA_MODE:
                     st.sidebar.error(err)
                 st.rerun()
 
+    st.sidebar.subheader("Pull an Issue + Its Subtree")
+    st.sidebar.caption(
+        "Enter the key of the top-level issue (e.g. a Use-Case or Epic) — pulls that issue plus every "
+        "child, grandchild, etc. underneath it, without needing to already be in the table below."
+    )
+    root_issue_key = st.sidebar.text_input("Root Issue Key", placeholder="e.g. MMP-1", key="root_issue_key")
+    if st.sidebar.button("Pull Subtree from Root"):
+        client = jira_client_from_config(st.session_state.jira_config)
+        if client is None:
+            st.sidebar.error("Configure and test the Jira connection first.")
+        elif not root_issue_key.strip():
+            st.sidebar.error("Enter a root issue key first.")
+        else:
+            try:
+                pulled = pull_subtree_from_jira(
+                    client, root_issue_key.strip(), st.session_state.jira_type_map, st.session_state.jira_schema
+                )
+                if pulled.empty:
+                    st.sidebar.error(f"No issue found for key '{root_issue_key.strip()}'.")
+                else:
+                    pulled_keys = set(pulled["ID"])
+                    kept = st.session_state.df[~st.session_state.df["ID"].isin(pulled_keys)]
+                    st.session_state.df = normalize_df(pd.concat([kept, pulled], ignore_index=True))
+                    st.sidebar.success(f"Pulled {len(pulled)} issue(s) under {root_issue_key.strip()}")
+                    st.rerun()
+            except JiraError as e:
+                st.sidebar.error(str(e))
+
 # ----------------------------
 # Data validation warnings
 # ----------------------------
