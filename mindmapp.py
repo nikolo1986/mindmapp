@@ -65,14 +65,21 @@ DEFAULT_ROWS = [
 # Jira sync helpers
 # ----------------------------
 def jira_client_from_config(cfg):
-    if not cfg or not cfg.get("base_url") or not cfg.get("api_token"):
+    if not cfg or not cfg.get("base_url"):
+        return None
+    auth_mode = cfg.get("auth_mode")
+    if auth_mode == "cloud" and not cfg.get("api_token"):
+        return None
+    if auth_mode == "server" and not cfg.get("password"):
         return None
     return JiraClient(
         base_url=cfg["base_url"],
-        api_token=cfg["api_token"],
+        auth_mode=auth_mode,
         email=cfg.get("email"),
-        auth_mode=cfg["auth_mode"],
-        api_version=cfg.get("api_version", "3"),
+        api_token=cfg.get("api_token"),
+        username=cfg.get("username"),
+        password=cfg.get("password"),
+        api_version=cfg.get("api_version", "3" if auth_mode == "cloud" else "2"),
     )
 
 def pull_from_jira(client, jql, type_map, schema):
@@ -235,16 +242,16 @@ if JIRA_MODE:
     with st.sidebar.expander("Site & Credentials", expanded=not st.session_state.jira_config.get("base_url")):
         base_url = st.text_input("Jira Base URL", value=st.session_state.jira_config.get("base_url", ""),
                                   placeholder="https://yourcompany.atlassian.net")
-        auth_label = st.selectbox("Auth Type", ["Jira Cloud (email + API token)", "Jira Server / Data Center (PAT)"])
+        auth_label = st.selectbox("Auth Type", ["Jira Cloud (email + API token)", "Jira Server / Data Center (username + password)"])
         auth_mode = "cloud" if auth_label.startswith("Jira Cloud") else "server"
 
-        email = st.session_state.jira_config.get("email", "")
+        email, username, api_token, password = "", "", "", ""
         if auth_mode == "cloud":
-            email = st.text_input("Email", value=email)
-            token_label = "API Token"
+            email = st.text_input("Email", value=st.session_state.jira_config.get("email", ""))
+            api_token = st.text_input("API Token", value=st.session_state.jira_config.get("api_token", ""), type="password")
         else:
-            token_label = "Personal Access Token"
-        api_token = st.text_input(token_label, value=st.session_state.jira_config.get("api_token", ""), type="password")
+            username = st.text_input("Username", value=st.session_state.jira_config.get("username", ""))
+            password = st.text_input("Password", value=st.session_state.jira_config.get("password", ""), type="password")
 
         project_key = st.text_input("Project Key", value=st.session_state.jira_config.get("project_key", ""),
                                      placeholder="e.g. MMP")
@@ -255,13 +262,15 @@ if JIRA_MODE:
                 "auth_mode": auth_mode,
                 "email": email.strip(),
                 "api_token": api_token,
+                "username": username.strip(),
+                "password": password,
                 "project_key": project_key.strip(),
             }
             st.session_state.jira_config = cfg
             try:
                 client = jira_client_from_config(cfg)
                 if client is None:
-                    st.error("Base URL and API token/PAT are required.")
+                    st.error("Base URL and credentials (API token, or username + password) are required.")
                 else:
                     me = client.test_connection()
                     st.session_state.jira_schema = client.discover_schema()

@@ -8,7 +8,8 @@ class JiraError(Exception):
 class JiraClient:
     """Thin wrapper around the Jira REST API for a user-supplied site."""
 
-    def __init__(self, base_url, api_token, email=None, auth_mode="cloud", api_version="3", timeout=20):
+    def __init__(self, base_url, auth_mode="cloud", email=None, api_token=None,
+                 username=None, password=None, api_version="3", timeout=20):
         if not base_url:
             raise JiraError("Jira base URL is required")
         self.base_url = base_url.rstrip("/")
@@ -18,11 +19,15 @@ class JiraClient:
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
         if auth_mode == "cloud":
-            if not email:
-                raise JiraError("Email is required for Jira Cloud (email + API token) auth")
+            if not email or not api_token:
+                raise JiraError("Email and API token are required for Jira Cloud auth")
             self.session.auth = (email, api_token)
+        elif auth_mode == "server":
+            if not username or not password:
+                raise JiraError("Username and password are required for Jira Server/Data Center auth")
+            self.session.auth = (username, password)
         else:
-            self.session.headers["Authorization"] = f"Bearer {api_token}"
+            raise JiraError(f"Unknown auth_mode: {auth_mode}")
 
     def _request(self, method, path, **kwargs):
         url = f"{self.rest}/{path.lstrip('/')}"
