@@ -26,10 +26,9 @@ Credentials are kept only in the browser session's memory, not written to disk.
 
 The mindmap canvas (`mindmap_component/`) is a real drag-and-drop Streamlit component, not just a static diagram:
 
-- Drag an issue-type chip from the palette on the left onto empty canvas to create a new issue there.
-- Drag one node onto another to set the dragged node's Parent ID.
-- Hold **Shift** while dragging one node onto another to add a "relates to" link instead of reparenting.
-- Click a node to select it in the Edit/Delete Issue sidebar controls.
+- **Desktop:** drag an issue-type chip from the palette onto empty canvas to create a new issue there; drag one node onto another to set the dragged node's Parent ID; hold **Shift** while dragging one node onto another to add a "relates to" link instead of reparenting.
+- **Touch (phone/tablet):** HTML5 drag-and-drop doesn't exist on touchscreens, so creating and relating use tap-based equivalents instead — tap a palette chip to arm it, then tap empty canvas to place it there; turn on the palette's **Relate mode** toggle before dragging one node onto another to add a "relates to" link instead of reparenting (there's no Shift key on a touchscreen). Node-to-node dragging itself works the same as desktop, since that's Cytoscape's own touch handling.
+- Click/tap a node to select it in the Edit/Delete Issue sidebar controls.
 - Dragging a node onto empty space just repositions it; positions are remembered between reruns.
 
 It's plain Cytoscape.js + hand-written JS implementing Streamlit's component protocol — no npm/build step, so `pip install -r requirements.txt` is still all you need.
