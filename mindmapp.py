@@ -1,9 +1,9 @@
 import io
-import json
 import pandas as pd
 import streamlit as st
 
 from jira_client import JiraClient, JiraError
+from mindmap_component import mindmap_canvas
 
 st.set_page_config(page_title="Mindmapp MVP", layout="wide")
 st.title("Mindmapp MVP")
@@ -66,6 +66,60 @@ DEFAULT_ROWS = [
 ]
 
 # ----------------------------
+# Tree helpers
+# ----------------------------
+def descendant_ids(df, root_id):
+    """IDs of root_id and everything under it via Parent ID, BFS style."""
+    result = {root_id}
+    found = True
+    while found:
+        found = False
+        children = df[df["Parent ID"].isin(result)]["ID"].tolist()
+        new = [c for c in children if c not in result]
+        if new:
+            result.update(new)
+            found = True
+    return result
+
+def would_create_cycle(df, child_id, new_parent_id):
+    """True if setting new_parent_id as child_id's parent would create a loop."""
+    if child_id == new_parent_id:
+        return True
+    return new_parent_id in descendant_ids(df, child_id)
+
+def find_data_issues(df):
+    """Dangling references and parent cycles, as human-readable messages."""
+    ids = set(df["ID"])
+    issues = []
+    for _, r in df.iterrows():
+        if r["Parent ID"] and r["Parent ID"] not in ids:
+            issues.append(f"{r['ID']}: Parent ID '{r['Parent ID']}' does not exist")
+        for b in [x.strip() for x in r["Blocks"].split(",") if x.strip()]:
+            if b not in ids:
+                issues.append(f"{r['ID']}: Blocks references '{b}', which does not exist")
+        for rel in [x.strip() for x in r["Relates To"].split(",") if x.strip()]:
+            if rel not in ids:
+                issues.append(f"{r['ID']}: Relates To references '{rel}', which does not exist")
+
+    parent_of = dict(zip(df["ID"], df["Parent ID"]))
+    reported_cycles = set()
+    for start in df["ID"]:
+        chain = [start]
+        seen = {start}
+        cur = start
+        while parent_of.get(cur):
+            cur = parent_of[cur]
+            if cur in seen:
+                cycle_key = frozenset(chain[chain.index(cur):] + [cur])
+                if cycle_key not in reported_cycles:
+                    reported_cycles.add(cycle_key)
+                    issues.append(f"Parent cycle: {' -> '.join(chain[chain.index(cur):] + [cur])}")
+                break
+            chain.append(cur)
+            seen.add(cur)
+    return issues
+
+# ----------------------------
 # Jira sync helpers
 # ----------------------------
 def jira_client_from_config(cfg):
@@ -86,50 +140,74 @@ def jira_client_from_config(cfg):
         api_version=cfg.get("api_version", "3" if auth_mode == "cloud" else "2"),
     )
 
+JIRA_ROW_COLUMNS = ["ID", "Level", "Summary", "Epic Name", "Parent ID", "Blocks", "Relates To", "Jira Key"]
+
+def _map_issue_to_row(issue, reverse_type_map, schema):
+    key = issue["key"]
+    fields = issue["fields"]
+    jira_type_name = fields["issuetype"]["name"]
+    level = reverse_type_map.get(jira_type_name, jira_type_name)
+
+    epic_name = ""
+    if schema.get("epic_name_field"):
+        epic_name = fields.get(schema["epic_name_field"]) or ""
+
+    parent_id = ""
+    if fields.get("parent"):
+        parent_id = fields["parent"]["key"]
+    elif schema.get("epic_link_field") and fields.get(schema["epic_link_field"]):
+        parent_id = fields[schema["epic_link_field"]]
+
+    blocks = []
+    relates = []
+    for link in fields.get("issuelinks", []) or []:
+        link_type_name = link.get("type", {}).get("name", "").lower()
+        if link_type_name == "blocks":
+            outward = link.get("outwardIssue")
+            if outward:
+                blocks.append(outward["key"])
+        elif link_type_name == "relates":
+            other = link.get("outwardIssue") or link.get("inwardIssue")
+            if other:
+                relates.append(other["key"])
+
+    return {
+        "ID": key,
+        "Level": level,
+        "Summary": fields.get("summary", "") or "",
+        "Epic Name": epic_name,
+        "Parent ID": parent_id,
+        "Blocks": ",".join(blocks),
+        "Relates To": ",".join(relates),
+        "Jira Key": key,
+    }
+
 def pull_from_jira(client, jql, type_map, schema):
     reverse_type_map = {v: k for k, v in type_map.items()}
     issues = client.search_issues(jql)
-    rows = []
-    for issue in issues:
-        key = issue["key"]
-        fields = issue["fields"]
-        jira_type_name = fields["issuetype"]["name"]
-        level = reverse_type_map.get(jira_type_name, jira_type_name)
+    rows = [_map_issue_to_row(issue, reverse_type_map, schema) for issue in issues]
+    return pd.DataFrame(rows, columns=JIRA_ROW_COLUMNS)
 
-        epic_name = ""
-        if schema.get("epic_name_field"):
-            epic_name = fields.get(schema["epic_name_field"]) or ""
+def pull_subtree_from_jira(client, root_key, type_map, schema, max_issues=500):
+    """BFS out from root_key via parent/Epic-Link, since JQL has no recursive descendant query."""
+    reverse_type_map = {v: k for k, v in type_map.items()}
+    fetched = {}
+    frontier = {root_key}
+    while frontier and len(fetched) < max_issues:
+        keys_clause = ", ".join(f'"{k}"' for k in frontier)
+        issues = client.search_issues(f"key in ({keys_clause})", max_results=len(frontier))
+        for issue in issues:
+            fetched[issue["key"]] = issue
 
-        parent_id = ""
-        if fields.get("parent"):
-            parent_id = fields["parent"]["key"]
-        elif schema.get("epic_link_field") and fields.get(schema["epic_link_field"]):
-            parent_id = fields[schema["epic_link_field"]]
+        child_clauses = [f'parent in ({keys_clause})']
+        if schema.get("epic_link_field"):
+            child_clauses.append(f'"Epic Link" in ({keys_clause})')
+        children = client.search_issues(" OR ".join(child_clauses), max_results=max_issues)
 
-        blocks = []
-        relates = []
-        for link in fields.get("issuelinks", []) or []:
-            link_type_name = link.get("type", {}).get("name", "").lower()
-            if link_type_name == "blocks":
-                outward = link.get("outwardIssue")
-                if outward:
-                    blocks.append(outward["key"])
-            elif link_type_name == "relates":
-                other = link.get("outwardIssue") or link.get("inwardIssue")
-                if other:
-                    relates.append(other["key"])
+        frontier = {c["key"] for c in children if c["key"] not in fetched}
 
-        rows.append({
-            "ID": key,
-            "Level": level,
-            "Summary": fields.get("summary", "") or "",
-            "Epic Name": epic_name,
-            "Parent ID": parent_id,
-            "Blocks": ",".join(blocks),
-            "Relates To": ",".join(relates),
-            "Jira Key": key,
-        })
-    return pd.DataFrame(rows, columns=["ID", "Level", "Summary", "Epic Name", "Parent ID", "Blocks", "Relates To", "Jira Key"])
+    rows = [_map_issue_to_row(issue, reverse_type_map, schema) for issue in fetched.values()]
+    return pd.DataFrame(rows, columns=JIRA_ROW_COLUMNS)
 
 def push_to_jira(client, project_key, df, type_map, schema):
     df = df.copy()
@@ -221,6 +299,13 @@ if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(DEFAULT_ROWS)
 
 st.session_state.df = normalize_df(st.session_state.df)
+
+if "node_positions" not in st.session_state:
+    st.session_state.node_positions = {}
+if "last_mindmap_event_id" not in st.session_state:
+    st.session_state.last_mindmap_event_id = None
+if "mindmap_focus" not in st.session_state:
+    st.session_state.mindmap_focus = ""
 
 # ----------------------------
 # Sidebar Controls
@@ -346,6 +431,228 @@ if JIRA_MODE:
                 st.rerun()
 
 # ----------------------------
+# Data validation warnings
+# ----------------------------
+data_issues = find_data_issues(st.session_state.df)
+if data_issues:
+    with st.expander(f"⚠️ {len(data_issues)} data issue(s) found", expanded=False):
+        for msg in data_issues:
+            st.warning(msg)
+
+# ----------------------------
+# Focus filter
+# ----------------------------
+st.subheader("Mindmap Canvas")
+
+all_ids = st.session_state.df["ID"].tolist()
+if st.session_state.mindmap_focus not in [""] + all_ids:
+    st.session_state.mindmap_focus = ""
+
+def _focus_label(fid):
+    if not fid:
+        return "(show all)"
+    row = st.session_state.df.loc[st.session_state.df["ID"] == fid]
+    return f"{fid} — {row.iloc[0]['Summary']}" if not row.empty else fid
+
+focus_options = [""] + all_ids
+fcol1, fcol2 = st.columns([4, 1])
+with fcol1:
+    st.session_state.mindmap_focus = st.selectbox(
+        "Focus on an issue (shows it and all its children only)",
+        options=focus_options,
+        format_func=_focus_label,
+        index=focus_options.index(st.session_state.mindmap_focus),
+    )
+with fcol2:
+    st.write("")
+    if st.button("Clear Focus", disabled=not st.session_state.mindmap_focus):
+        st.session_state.mindmap_focus = ""
+        st.rerun()
+
+if st.session_state.mindmap_focus:
+    focus_ids = descendant_ids(st.session_state.df, st.session_state.mindmap_focus)
+    display_df = st.session_state.df[st.session_state.df["ID"].isin(focus_ids)]
+else:
+    display_df = st.session_state.df
+
+if JIRA_MODE and st.session_state.mindmap_focus:
+    focus_row = st.session_state.df.loc[st.session_state.df["ID"] == st.session_state.mindmap_focus].iloc[0]
+    if focus_row["Jira Key"]:
+        if st.button(f"🔄 Pull subtree of {focus_row['Jira Key']} from Jira"):
+            client = jira_client_from_config(st.session_state.jira_config)
+            if client is None:
+                st.error("Configure and test the Jira connection first.")
+            else:
+                try:
+                    pulled = pull_subtree_from_jira(
+                        client, focus_row["Jira Key"], st.session_state.jira_type_map, st.session_state.jira_schema
+                    )
+                    pulled_keys = set(pulled["ID"])
+                    kept = st.session_state.df[~st.session_state.df["ID"].isin(pulled_keys)]
+                    st.session_state.df = normalize_df(pd.concat([kept, pulled], ignore_index=True))
+                    st.success(f"Pulled {len(pulled)} issue(s) in this subtree from Jira")
+                    st.rerun()
+                except JiraError as e:
+                    st.error(str(e))
+    else:
+        st.caption("This issue has no Jira Key yet — Push to Jira first to enable a subtree pull.")
+
+# ----------------------------
+# Build canvas elements
+# ----------------------------
+def build_elements(df):
+    elements = []
+    valid_ids = set(df["ID"])
+    seen_relates = set()
+    for _, r in df.iterrows():
+        node_id = r["ID"]
+        label_prefix = r["Jira Key"] if r["Jira Key"] else r["Level"]
+        sync_class = "synced" if r["Jira Key"] else "unsynced"
+        elements.append({
+            "data": {"id": node_id, "label": f"{label_prefix}: {r['Summary']}"},
+            "classes": f"{r['Level']} {sync_class}",
+        })
+
+        parent_id = r["Parent ID"].strip()
+        if parent_id and parent_id in valid_ids:
+            elements.append({"data": {"source": parent_id, "target": node_id, "relation": "hierarchy"}})
+
+        blocks = str(r["Blocks"]).strip()
+        if blocks:
+            for blocked in [b.strip() for b in blocks.split(",") if b.strip()]:
+                if blocked in valid_ids:
+                    elements.append({"data": {"source": node_id, "target": blocked, "relation": "blocks"}})
+
+        relates_to = str(r["Relates To"]).strip()
+        if relates_to:
+            for related in [b.strip() for b in relates_to.split(",") if b.strip()]:
+                if related in valid_ids:
+                    pair = frozenset((node_id, related))
+                    if pair not in seen_relates:
+                        seen_relates.add(pair)
+                        elements.append({"data": {"source": node_id, "target": related, "relation": "relates"}})
+    return elements
+
+STYLESHEET = [
+    {"selector": "node", "style": {"label": "data(label)", "color": "white",
+                                    "text-outline-color": "#000", "text-outline-width": 2,
+                                    "text-valign": "center", "text-halign": "center"}},
+    {"selector": ".unsynced", "style": {"border-width": 3, "border-style": "dashed", "border-color": "#ffbf00"}},
+]
+for lvl, spec in COLOR_SHAPE.items():
+    STYLESHEET.append({
+        "selector": f".{lvl}",
+        "style": {"background-color": spec["color"], "shape": spec["shape"],
+                  "width": spec["w"], "height": spec["h"]}
+    })
+STYLESHEET.append({
+    "selector": "edge[relation = 'hierarchy']",
+    "style": {"curve-style": "bezier", "target-arrow-shape": "triangle",
+              "line-color": "#999", "target-arrow-color": "#999"}
+})
+STYLESHEET.append({
+    "selector": "edge[relation = 'blocks']",
+    "style": {
+        "line-style": "dashed",
+        "line-color": "red",
+        "curve-style": "bezier",
+        "target-arrow-shape": "triangle",
+        "target-arrow-color": "red",
+        "arrow-scale": 1.5,
+        "label": "blocks",
+        "font-size": 10,
+        "color": "red",
+        "text-rotation": "autorotate",
+        "text-background-color": "white",
+        "text-background-opacity": 1,
+        "text-background-padding": "2px"
+    }
+})
+STYLESHEET.append({
+    "selector": "edge[relation = 'relates']",
+    "style": {
+        "line-style": "dotted",
+        "line-color": "#1f77b4",
+        "curve-style": "bezier",
+        "target-arrow-shape": "none",
+        "source-arrow-shape": "none",
+        "width": 2,
+        "label": "relates to",
+        "font-size": 10,
+        "color": "#1f77b4",
+        "text-rotation": "autorotate",
+        "text-background-color": "white",
+        "text-background-opacity": 1,
+        "text-background-padding": "2px"
+    }
+})
+
+elements = build_elements(display_df)
+canvas_positions = {k: v for k, v in st.session_state.node_positions.items() if k in set(display_df["ID"])}
+
+# ----------------------------
+# Interactive canvas + event handling
+# ----------------------------
+mm_event = mindmap_canvas(
+    elements=elements,
+    stylesheet=STYLESHEET,
+    issue_types=ISSUE_TYPES,
+    color_shape=COLOR_SHAPE,
+    positions=canvas_positions,
+    height=520,
+    key="mindmap_canvas",
+)
+
+if mm_event and mm_event.get("event_id") != st.session_state.last_mindmap_event_id:
+    st.session_state.last_mindmap_event_id = mm_event["event_id"]
+    kind = mm_event.get("kind")
+
+    if kind == "select":
+        clicked_id = mm_event.get("id")
+        if clicked_id in set(st.session_state.df["ID"]):
+            st.session_state["edit_id_select"] = clicked_id
+            st.session_state["delete_id_select"] = clicked_id
+
+    elif kind == "create":
+        level = mm_event.get("level")
+        if level in ISSUE_TYPES:
+            new_id = id_prefix(level) + str(pd.Timestamp.utcnow().value)
+            new_row = {
+                "ID": new_id, "Level": level, "Summary": f"New {level}", "Epic Name": "",
+                "Parent ID": "", "Blocks": "", "Relates To": "", "Jira Key": "",
+            }
+            st.session_state.df = normalize_df(
+                pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+            )
+            if "x" in mm_event and "y" in mm_event:
+                st.session_state.node_positions[new_id] = {"x": mm_event["x"], "y": mm_event["y"]}
+            st.session_state["edit_id_select"] = new_id
+            st.info(f"Created {level} '{new_id}' — rename it in Edit Issue in the sidebar.")
+
+    elif kind == "reparent":
+        child_id, new_parent_id = mm_event.get("sourceId"), mm_event.get("targetId")
+        ids = set(st.session_state.df["ID"])
+        if child_id in ids and new_parent_id in ids:
+            if would_create_cycle(st.session_state.df, child_id, new_parent_id):
+                st.error(f"Can't set {new_parent_id} as {child_id}'s parent — that would create a cycle.")
+            else:
+                st.session_state.df.loc[st.session_state.df["ID"] == child_id, "Parent ID"] = new_parent_id
+
+    elif kind == "relate":
+        a_id, b_id = mm_event.get("sourceId"), mm_event.get("targetId")
+        ids = set(st.session_state.df["ID"])
+        if a_id in ids and b_id in ids:
+            row = st.session_state.df.loc[st.session_state.df["ID"] == a_id].iloc[0]
+            existing = [x.strip() for x in row["Relates To"].split(",") if x.strip()]
+            if b_id not in existing:
+                existing.append(b_id)
+                st.session_state.df.loc[st.session_state.df["ID"] == a_id, "Relates To"] = ",".join(existing)
+
+    elif kind == "layout":
+        for node_id, pos in (mm_event.get("positions") or {}).items():
+            st.session_state.node_positions[node_id] = pos
+
+# ----------------------------
 # Add Issue
 # ----------------------------
 st.sidebar.subheader("Add Issue")
@@ -393,7 +700,9 @@ if submit_add and summary.strip():
 # ----------------------------
 st.sidebar.subheader("Edit Issue")
 id_options = [""] + st.session_state.df["ID"].astype(str).tolist()
-edit_id = st.sidebar.selectbox("Select ID to Edit", options=id_options)
+if st.session_state.get("edit_id_select") not in id_options:
+    st.session_state["edit_id_select"] = ""
+edit_id = st.sidebar.selectbox("Select ID to Edit", options=id_options, key="edit_id_select")
 
 if edit_id:
     row = st.session_state.df.loc[st.session_state.df["ID"] == edit_id]
@@ -420,9 +729,13 @@ if edit_id:
 # Delete Issue (with cascade option + confirm)
 # ----------------------------
 st.sidebar.subheader("Delete Issue")
+delete_id_options = [""] + st.session_state.df["ID"].astype(str).tolist()
+if st.session_state.get("delete_id_select") not in delete_id_options:
+    st.session_state["delete_id_select"] = ""
 delete_id = st.sidebar.selectbox(
     "Select ID to Delete",
-    options=[""] + st.session_state.df["ID"].astype(str).tolist()
+    options=delete_id_options,
+    key="delete_id_select",
 )
 
 delete_mode = st.sidebar.radio(
@@ -490,138 +803,29 @@ edited = st.data_editor(
 st.session_state.df = normalize_df(edited)
 
 # ----------------------------
-# Build Cytoscape Elements
-# ----------------------------
-elements = []
-valid_ids = set(st.session_state.df["ID"])
-seen_relates = set()
-
-for _, r in st.session_state.df.iterrows():
-    node_id = r["ID"]
-    label_prefix = r["Jira Key"] if r["Jira Key"] else r["Level"]
-    elements.append({
-        "data": {"id": node_id, "label": f"{label_prefix}: {r['Summary']}"},
-        "classes": r["Level"],
-    })
-
-    # Parent/child
-    parent_id = r["Parent ID"].strip()
-    if parent_id and parent_id in valid_ids:
-        elements.append({"data": {"source": parent_id, "target": node_id, "relation": "hierarchy"}})
-
-    # Blocks edges
-    blocks = str(r["Blocks"]).strip()
-    if blocks:
-        for blocked in [b.strip() for b in blocks.split(",") if b.strip()]:
-            if blocked in valid_ids:
-                elements.append({"data": {"source": node_id, "target": blocked, "relation": "blocks"}})
-
-    # Relates To edges (symmetric, so draw each pair only once)
-    relates_to = str(r["Relates To"]).strip()
-    if relates_to:
-        for related in [b.strip() for b in relates_to.split(",") if b.strip()]:
-            if related in valid_ids:
-                pair = frozenset((node_id, related))
-                if pair not in seen_relates:
-                    seen_relates.add(pair)
-                    elements.append({"data": {"source": node_id, "target": related, "relation": "relates"}})
-
-stylesheet = [
-    {"selector": "node", "style": {"label": "data(label)", "color": "white",
-                                   "text-outline-color": "#000", "text-outline-width": 2,
-                                   "text-valign": "center", "text-halign": "center"}},
-]
-for lvl, spec in COLOR_SHAPE.items():
-    stylesheet.append({
-        "selector": f".{lvl}",
-        "style": {"background-color": spec["color"], "shape": spec["shape"],
-                  "width": spec["w"], "height": spec["h"]}
-    })
-stylesheet.append({
-    "selector": "edge[relation = 'hierarchy']",
-    "style": {"curve-style": "bezier", "target-arrow-shape": "triangle",
-              "line-color": "#999", "target-arrow-color": "#999"}
-})
-stylesheet.append({
-    "selector": "edge[relation = 'blocks']",
-    "style": {
-        "line-style": "dashed",
-        "line-color": "red",
-        "curve-style": "bezier",            # ensures arrows display properly
-        "target-arrow-shape": "triangle",
-        "target-arrow-color": "red",
-        "arrow-scale": 1.5,
-        "label": "blocks",
-        "font-size": 10,
-        "color": "red",
-        "text-rotation": "autorotate",
-        "text-background-color": "white",
-        "text-background-opacity": 1,
-        "text-background-padding": "2px"
-    }
-})
-stylesheet.append({
-    "selector": "edge[relation = 'relates']",
-    "style": {
-        "line-style": "dotted",
-        "line-color": "#1f77b4",
-        "curve-style": "bezier",
-        "target-arrow-shape": "none",
-        "source-arrow-shape": "none",
-        "width": 2,
-        "label": "relates to",
-        "font-size": 10,
-        "color": "#1f77b4",
-        "text-rotation": "autorotate",
-        "text-background-color": "white",
-        "text-background-opacity": 1,
-        "text-background-padding": "2px"
-    }
-})
-
-# ----------------------------
-# Render Cytoscape
-# ----------------------------
-CY_SRC = "https://unpkg.com/cytoscape/dist/cytoscape.min.js"
-html = f"""
-<!doctype html>
-<html>
-<head>
-  <script src="{CY_SRC}"></script>
-  <style>#cy {{ width:100%; height:450px; background:#fff; }}</style>
-</head>
-<body>
-  <div id="cy"></div>
-  <script>
-    cytoscape({{
-      container: document.getElementById('cy'),
-      elements: {json.dumps(elements)},
-      style: {json.dumps(stylesheet)},
-      layout: {{ name: 'breadthfirst', directed: true, spacingFactor: 1.5 }}
-    }});
-  </script>
-</body>
-</html>
-"""
-st.subheader("Mindmap Canvas")
-st.components.v1.html(html, height=500, scrolling=True)
-
-# ----------------------------
 # Legend
 # ----------------------------
 st.markdown("### Legend")
 legend_md = """
 - **Shapes / Colors**
-  - 🟦 Ellipse (blue) = Use-Case  
-  - 🟩 Round-rectangle (green) = Epic  
-  - 🟧 Diamond (orange) = Story  
-  - ⚪ Triangle (gray) = Task  
-  - 🟪 Hexagon (purple) = Sub-task  
+  - 🟦 Ellipse (blue) = Use-Case
+  - 🟩 Round-rectangle (green) = Epic
+  - 🟧 Diamond (orange) = Story
+  - ⚪ Triangle (gray) = Task
+  - 🟪 Hexagon (purple) = Sub-task
+  - 🟡 Dashed amber border = not yet pushed to Jira
 
 - **Edges**
   - ➡️ **Solid gray arrow** = hierarchy (Parent → Child)
   - ➡️ **Dashed red arrow labeled 'blocks'** = blocking relationship (Issue → Blocked Issue)
   - 🔵 **Dotted blue line labeled 'relates to'** = e.g. a Task that satisfies a Story, synced via Jira's "Relates" link
+
+- **Canvas interactions**
+  - Drag a chip from the left palette onto empty canvas to create a new issue there
+  - Drag one node onto another to set the dragged node's Parent ID
+  - Hold **Shift** while dragging one node onto another to add a "relates to" link instead
+  - Click a node to select it for editing/deleting in the sidebar
+  - Dragging a node to empty space just repositions it (remembered between reruns)
 """
 st.markdown(legend_md)
 

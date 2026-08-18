@@ -1,0 +1,213 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; }
+  #wrap { display: flex; height: 100%; }
+  #palette {
+    width: 130px;
+    flex: none;
+    padding: 8px;
+    box-sizing: border-box;
+    border-right: 1px solid #ddd;
+    background: #fafafa;
+  }
+  #palette h4 { margin: 0 0 6px 0; font-size: 12px; color: #555; }
+  .chip {
+    color: white;
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    cursor: grab;
+    text-align: center;
+    user-select: none;
+  }
+  .hint { font-size: 10px; color: #888; margin-top: 8px; line-height: 1.4; }
+  #cy { flex: 1 1 auto; height: 100%; background: #fff; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="palette">
+    <h4>Drag to canvas</h4>
+    <div id="chips"></div>
+    <div class="hint">
+      Drag a node onto another to set its parent.<br>
+      Hold Shift while dragging to create a "relates to" link instead.
+    </div>
+  </div>
+  <div id="cy"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  var Streamlit = {
+    _height: -1,
+    _handlers: {},
+    init: function () {
+      window.addEventListener("message", this._onMessage.bind(this));
+      this._post({ type: "streamlit:componentReady", apiVersion: 1 });
+    },
+    _onMessage: function (event) {
+      var data = event.data;
+      if (!data || !data.isStreamlitMessage) return;
+      if (data.type === "streamlit:render") {
+        this._emit("render", data);
+      }
+    },
+    _post: function (msg) {
+      msg.isStreamlitMessage = true;
+      window.parent.postMessage(msg, "*");
+    },
+    setComponentValue: function (value) {
+      this._post({ type: "streamlit:setComponentValue", value: value, dataType: "json" });
+    },
+    setFrameHeight: function (height) {
+      if (height === this._height) return;
+      this._height = height;
+      this._post({ type: "streamlit:setFrameHeight", height: height });
+    },
+    on: function (name, fn) {
+      this._handlers[name] = this._handlers[name] || [];
+      this._handlers[name].push(fn);
+    },
+    _emit: function (name, data) {
+      (this._handlers[name] || []).forEach(function (fn) { fn(data); });
+    }
+  };
+
+  function genId() {
+    return Date.now() + "-" + Math.random().toString(36).slice(2);
+  }
+
+  function sendEvent(payload) {
+    payload.event_id = genId();
+    Streamlit.setComponentValue(payload);
+  }
+
+  var cy = null;
+  var shiftDown = false;
+  document.addEventListener("keydown", function (e) { if (e.key === "Shift") shiftDown = true; });
+  document.addEventListener("keyup", function (e) { if (e.key === "Shift") shiftDown = false; });
+  window.addEventListener("blur", function () { shiftDown = false; });
+
+  function collectPositions() {
+    var out = {};
+    cy.nodes().forEach(function (n) {
+      out[n.id()] = { x: n.position("x"), y: n.position("y") };
+    });
+    return out;
+  }
+
+  function findDropTarget(node) {
+    var bb = node.boundingBox();
+    var cx = (bb.x1 + bb.x2) / 2;
+    var cy2 = (bb.y1 + bb.y2) / 2;
+    var best = null;
+    var bestDist = Infinity;
+    node.cy().nodes().forEach(function (other) {
+      if (other.id() === node.id()) return;
+      var obb = other.boundingBox();
+      var ocx = (obb.x1 + obb.x2) / 2;
+      var ocy = (obb.y1 + obb.y2) / 2;
+      var dx = cx - ocx, dy = cy2 - ocy;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      var threshold = ((bb.w + obb.w) / 2) * 0.55;
+      if (dist < threshold && dist < bestDist) {
+        best = other;
+        bestDist = dist;
+      }
+    });
+    return best;
+  }
+
+  function buildPalette(issueTypes, colorShape) {
+    var chips = document.getElementById("chips");
+    chips.innerHTML = "";
+    issueTypes.forEach(function (level) {
+      var spec = (colorShape && colorShape[level]) || { color: "#666" };
+      var chip = document.createElement("div");
+      chip.className = "chip";
+      chip.textContent = level;
+      chip.draggable = true;
+      chip.style.background = spec.color;
+      chip.addEventListener("dragstart", function (e) {
+        e.dataTransfer.setData("text/plain", level);
+        e.dataTransfer.effectAllowed = "copy";
+      });
+      chips.appendChild(chip);
+    });
+  }
+
+  function renderGraph(args) {
+    var container = document.getElementById("cy");
+    if (cy) {
+      cy.destroy();
+      cy = null;
+    }
+
+    var positions = args.positions || {};
+    var elements = args.elements || [];
+    var hasAllPositions = elements
+      .filter(function (el) { return el.data && el.data.id; })
+      .every(function (el) { return positions[el.data.id]; });
+
+    cy = cytoscape({
+      container: container,
+      elements: elements,
+      style: args.stylesheet || [],
+      layout: hasAllPositions
+        ? { name: "preset", positions: function (n) { return positions[n.id()]; } }
+        : { name: "breadthfirst", directed: true, spacingFactor: 1.5 }
+    });
+
+    cy.on("tap", "node", function (evt) {
+      sendEvent({ kind: "select", id: evt.target.id() });
+    });
+
+    cy.on("dragfree", "node", function (evt) {
+      var node = evt.target;
+      var target = findDropTarget(node);
+      if (target) {
+        sendEvent({
+          kind: shiftDown ? "relate" : "reparent",
+          sourceId: node.id(),
+          targetId: target.id()
+        });
+      } else {
+        sendEvent({ kind: "layout", positions: collectPositions() });
+      }
+    });
+
+    container.ondragover = function (e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    };
+    container.ondrop = function (e) {
+      e.preventDefault();
+      var level = e.dataTransfer.getData("text/plain");
+      if (!level) return;
+      var rect = container.getBoundingClientRect();
+      var pan = cy.pan(), zoom = cy.zoom();
+      var x = (e.clientX - rect.left - pan.x) / zoom;
+      var y = (e.clientY - rect.top - pan.y) / zoom;
+      sendEvent({ kind: "create", level: level, x: x, y: y });
+    };
+  }
+
+  Streamlit.on("render", function (data) {
+    var args = data.args || {};
+    buildPalette(args.issue_types || [], args.color_shape || {});
+    renderGraph(args);
+    Streamlit.setFrameHeight(args.height || 520);
+  });
+
+  Streamlit.init();
+})();
+</script>
+</body>
+</html>
